@@ -101,6 +101,76 @@ A Svelte MCP server is configured for this project, providing access to comprehe
 - **`svelte-autofixer`** — Run this on all Svelte code before finalizing it. Keep calling it until no issues or suggestions are returned.
 - **`playground-link`** — Only use after asking the user if they want a playground link, and never if code was written directly to project files.
 
+### Tailwind CSS 4
+
+This project uses Tailwind CSS v4 with the Vite plugin (`@tailwindcss/vite`) — not PostCSS.
+
+#### CSS-first configuration
+
+- There is no `tailwind.config.js` — all configuration lives in `src/app.css`
+- Import Tailwind with `@import 'tailwindcss'` at the top of `src/app.css`
+- Define design tokens (colors, fonts, breakpoints, spacing, etc.) with the `@theme` directive using CSS variables:
+
+```css
+@import 'tailwindcss';
+
+@theme {
+	--font-display: 'Satoshi', 'sans-serif';
+	--color-brand-500: oklch(0.84 0.18 117.33);
+	--breakpoint-3xl: 1920px;
+}
+```
+
+#### Theme variables in custom CSS
+
+- Reference theme tokens with CSS variables (`var(--color-red-500)`), **not** the legacy `theme()` function
+- Place component-level custom styles in `@layer components { ... }`
+
+#### Custom utilities, variants, and sources
+
+- Define custom utilities with `@utility` — they automatically work with all Tailwind variants (hover, focus, responsive, etc.):
+
+```css
+@utility content-auto {
+	content-visibility: auto;
+}
+```
+
+- Apply Tailwind variants inside custom CSS with `@variant`:
+
+```css
+.my-element {
+	background: white;
+	@variant dark {
+		background: black;
+	}
+}
+```
+
+- Define custom variants with `@custom-variant` (e.g., class-based dark mode):
+
+```css
+@custom-variant dark (&:where(.dark, .dark *));
+```
+
+- Use `@source` to include paths not covered by automatic content detection:
+
+```css
+@source '../node_modules/@my-company/ui-lib';
+```
+
+#### Class sorting
+
+- `prettier-plugin-tailwindcss` automatically sorts utility classes — do not manually reorder them
+- The plugin is configured with `tailwindStylesheet: './src/app.css'` in `.prettierrc`
+
+#### Usage conventions
+
+- Prefer Tailwind utility classes in markup over custom CSS
+- Use Tailwind's responsive (`sm:`, `md:`, `lg:`, etc.) and state (`hover:`, `focus:`, `dark:`, etc.) variants — do not write manual media queries or pseudo-selectors when a variant exists
+- Use Svelte's scoped `<style>` block only for styles that cannot be expressed as utilities
+- When using `@apply` in scoped styles, keep it minimal — prefer utility classes in the template
+
 ### Component Structure
 
 Order sections in Svelte files as:

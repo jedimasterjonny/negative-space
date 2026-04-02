@@ -227,7 +227,8 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 - Unit/integration tests: Vitest
 - E2E tests: Playwright
 - `bun run test:unit` — run Vitest in watch mode
-- `bun run test` — run all tests once
+- `bun run test:e2e` — run Playwright E2E tests
+- `bun run test` — run all tests once (unit + E2E)
 
 ### File naming and placement
 
@@ -253,3 +254,25 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 - Use `render` from `vitest-browser-svelte` to mount components: `const screen = await render(Component, { props })`
 - Always use `expect.element()` with locators (not bare `expect()`) — it has built-in retry-ability that reduces flakiness from async rendering
 - Prefer accessible locators: `getByRole`, `getByText`, `getByLabelText` over `getByTestId`
+
+### E2E testing (Playwright)
+
+#### Configuration
+
+- Config lives in `playwright.config.ts` at the project root
+- Tests build and preview the app before running (`bun run build && bun run preview` on port 4173)
+- `testMatch` is set to `**/*.spec.ts` — E2E test files must use the `.spec.ts` extension
+
+#### Writing E2E tests
+
+- Import `test` and `expect` from `@playwright/test`
+- Tests interact with the full running application — they are framework-agnostic and know nothing about Svelte
+- Use `page.goto('/path')` for navigation — Playwright resolves relative URLs against the preview server
+- Prefer user-facing locators in this priority order:
+  1. `page.getByRole()` — most resilient, based on accessibility roles (e.g., `getByRole('button', { name: 'Submit' })`)
+  2. `page.getByText()`, `page.getByLabel()`, `page.getByPlaceholder()` — based on visible text/labels
+  3. `page.getByTestId()` — use only when accessible locators are not practical
+  4. `page.locator('css-selector')` — last resort; avoid CSS/XPath selectors as they are brittle
+- Use web-first assertions (`await expect(locator).toBeVisible()`) — they auto-retry until the condition is met, avoiding flaky tests
+- Do not add manual waits or `page.waitForTimeout()` — rely on Playwright's built-in auto-waiting
+- Each test gets a fresh browser context — do not rely on state from previous tests

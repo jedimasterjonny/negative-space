@@ -15,13 +15,6 @@ Negative Space is a SvelteKit application using Svelte 5 (runes mode enforced) a
 
 ## Code Style
 
-### Formatting (enforced by Prettier)
-
-- Tabs for indentation
-- Single quotes
-- No trailing commas
-- 100 character line width
-
 ### Linting (enforced by ESLint)
 
 - Import ordering is enforced by `eslint-plugin-perfectionist` using natural alphabetical sorting
@@ -29,20 +22,6 @@ Negative Space is a SvelteKit application using Svelte 5 (runes mode enforced) a
 - Library imports come first, local imports last
 - Do not manually reorder imports — run `bun run lint:fix` if import order fails
 - Do not add `eslint-disable` comments unless absolutely necessary; always include a justification
-
-#### typescript-eslint
-
-- `@typescript-eslint/no-explicit-any` — avoid `any`; use `unknown` and narrow the type
-- `@typescript-eslint/no-unused-vars` — do not leave unused variables or imports (prefix intentionally unused params with `_`)
-
-#### eslint-plugin-svelte
-
-- `svelte/no-dom-manipulating` — do not directly manipulate the DOM; use `{@attach}` for external library integration
-- `svelte/no-object-in-text-mustaches` — do not pass objects directly into `{...}` text interpolation
-- `svelte/no-top-level-browser-globals` — never reference `window`, `document`, or other browser globals at the top level; guard with `browser` from `$app/environment` or use `$effect`
-- `svelte/prefer-svelte-reactivity` — use Svelte's reactive `SvelteMap`/`SvelteSet` instead of mutable built-in `Map`/`Set`
-- `svelte/require-event-prefix` — event callback props must start with `on` (e.g., `onclick`, `onchange`)
-- `svelte/valid-each-key` — `{#each}` keys must reference variables defined within the each block
 
 ### TypeScript
 
@@ -103,73 +82,13 @@ A Svelte MCP server is configured for this project, providing access to comprehe
 
 ### Tailwind CSS 4
 
-This project uses Tailwind CSS v4 with the Vite plugin (`@tailwindcss/vite`) — not PostCSS.
-
-#### CSS-first configuration
-
-- There is no `tailwind.config.js` — all configuration lives in `src/app.css`
-- Import Tailwind with `@import 'tailwindcss'` at the top of `src/app.css`
-- Define design tokens (colors, fonts, breakpoints, spacing, etc.) with the `@theme` directive using CSS variables:
-
-```css
-@import 'tailwindcss';
-
-@theme {
-	--font-display: 'Satoshi', 'sans-serif';
-	--color-brand-500: oklch(0.84 0.18 117.33);
-	--breakpoint-3xl: 1920px;
-}
-```
-
-#### Theme variables in custom CSS
-
+- Tailwind v4 with Vite plugin (`@tailwindcss/vite`) — not PostCSS
+- No `tailwind.config.js` — all configuration lives in `src/app.css` using `@theme` directive
 - Reference theme tokens with CSS variables (`var(--color-red-500)`), **not** the legacy `theme()` function
-- Place component-level custom styles in `@layer components { ... }`
-
-#### Custom utilities, variants, and sources
-
-- Define custom utilities with `@utility` — they automatically work with all Tailwind variants (hover, focus, responsive, etc.):
-
-```css
-@utility content-auto {
-	content-visibility: auto;
-}
-```
-
-- Apply Tailwind variants inside custom CSS with `@variant`:
-
-```css
-.my-element {
-	background: white;
-	@variant dark {
-		background: black;
-	}
-}
-```
-
-- Define custom variants with `@custom-variant` (e.g., class-based dark mode):
-
-```css
-@custom-variant dark (&:where(.dark, .dark *));
-```
-
-- Use `@source` to include paths not covered by automatic content detection:
-
-```css
-@source '../node_modules/@my-company/ui-lib';
-```
-
-#### Class sorting
-
-- `prettier-plugin-tailwindcss` automatically sorts utility classes — do not manually reorder them
-- The plugin is configured with `tailwindStylesheet: './src/app.css'` in `.prettierrc`
-
-#### Usage conventions
-
+- Define custom utilities with `@utility`, custom variants with `@custom-variant`, sources with `@source`
+- `prettier-plugin-tailwindcss` sorts utility classes automatically — do not manually reorder them
 - Prefer Tailwind utility classes in markup over custom CSS
-- Use Tailwind's responsive (`sm:`, `md:`, `lg:`, etc.) and state (`hover:`, `focus:`, `dark:`, etc.) variants — do not write manual media queries or pseudo-selectors when a variant exists
 - Use Svelte's scoped `<style>` block only for styles that cannot be expressed as utilities
-- When using `@apply` in scoped styles, keep it minimal — prefer utility classes in the template
 
 ### Component Structure
 
@@ -198,7 +117,8 @@ Before creating any commit, verify:
 
 1. `bun run lint` passes (Prettier + ESLint)
 2. `bun run check` passes (svelte-check / TypeScript)
-3. `bun run build` succeeds
+3. `bun run test` passes (unit + E2E)
+4. `bun run build` succeeds
 
 Do not commit code that breaks the build, fails type checking, or has lint errors. Every commit in history must be independently buildable and clean.
 
@@ -219,7 +139,7 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 ### Dependencies
 
 - Package manager: Bun
-- Renovate manages automated dependency updates
+- Renovate manages dependency updates — do not manually bump dependencies
 - Node >= 20 required (`engine-strict=true`)
 
 ## Testing
@@ -234,16 +154,12 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 
 - Unit/component tests: `*.test.ts` or `*.svelte.test.ts` — place alongside source files
 - E2E tests: `*.spec.ts` — place in `tests/` directory
-- Tests that use runes (`$state`, `$derived`, `$effect`) **must** use the `.svelte.test.ts` extension so Vitest processes them correctly
-
-### Test configuration
-
-- Two-project split in `vite.config.ts`: `client` (browser mode for `*.svelte.test.ts`) and `server` (Node for `*.test.ts`)
-- `requireAssertions: true` — every test must contain at least one assertion
-- Add `/// <reference types="vitest/browser" />` in browser test files for correct type hints
 
 ### Writing tests
 
+- Every test must contain at least one assertion (`requireAssertions: true`)
+- Tests that use runes (`$state`, `$derived`, `$effect`) **must** use the `.svelte.test.ts` extension so Vitest processes them correctly
+- Add `/// <reference types="vitest/browser" />` in browser test files for correct type hints
 - Before writing a component test, consider whether the logic can be extracted and tested in isolation without the component overhead
 - For testing components with two-way bindings, context, or snippets, create a `.test.svelte` wrapper component
 - Use `flushSync` from `svelte` after state mutations to synchronously flush updates before asserting
@@ -257,17 +173,6 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 
 ### E2E testing (Playwright)
 
-#### Configuration
-
-- Config lives in `playwright.config.ts` at the project root
-- Tests build and preview the app before running (`bun run build && bun run preview` on port 4173)
-- `testMatch` is set to `**/*.spec.ts` — E2E test files must use the `.spec.ts` extension
-
-#### Writing E2E tests
-
-- Import `test` and `expect` from `@playwright/test`
-- Tests interact with the full running application — they are framework-agnostic and know nothing about Svelte
-- Use `page.goto('/path')` for navigation — Playwright resolves relative URLs against the preview server
 - Prefer user-facing locators in this priority order:
   1. `page.getByRole()` — most resilient, based on accessibility roles (e.g., `getByRole('button', { name: 'Submit' })`)
   2. `page.getByText()`, `page.getByLabel()`, `page.getByPlaceholder()` — based on visible text/labels

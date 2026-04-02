@@ -226,5 +226,30 @@ Husky runs `bun run lint` on every commit. All code must pass Prettier and ESLin
 
 - Unit/integration tests: Vitest
 - E2E tests: Playwright
-- Place unit tests alongside source files as `*.test.ts` or `*.test.svelte.ts`
-- Place E2E tests in `tests/` directory as `*.spec.ts`
+- `bun run test:unit` — run Vitest in watch mode
+- `bun run test` — run all tests once
+
+### File naming and placement
+
+- Unit/component tests: `*.test.ts` or `*.svelte.test.ts` — place alongside source files
+- E2E tests: `*.spec.ts` — place in `tests/` directory
+- Tests that use runes (`$state`, `$derived`, `$effect`) **must** use the `.svelte.test.ts` extension so Vitest processes them correctly
+
+### Test configuration
+
+- Two-project split in `vite.config.ts`: `client` (browser mode for `*.svelte.test.ts`) and `server` (Node for `*.test.ts`)
+- `requireAssertions: true` — every test must contain at least one assertion
+- Add `/// <reference types="vitest/browser" />` in browser test files for correct type hints
+
+### Writing tests
+
+- Before writing a component test, consider whether the logic can be extracted and tested in isolation without the component overhead
+- For testing components with two-way bindings, context, or snippets, create a `.test.svelte` wrapper component
+- Use `flushSync` from `svelte` after state mutations to synchronously flush updates before asserting
+- Wrap tests that exercise `$effect`-based code in `$effect.root()` and call the returned cleanup function
+
+### Component testing (vitest-browser-svelte)
+
+- Use `render` from `vitest-browser-svelte` to mount components: `const screen = await render(Component, { props })`
+- Always use `expect.element()` with locators (not bare `expect()`) — it has built-in retry-ability that reduces flakiness from async rendering
+- Prefer accessible locators: `getByRole`, `getByText`, `getByLabelText` over `getByTestId`

@@ -100,6 +100,14 @@ UI components via daisyUI 5 (`@plugin "daisyui"` in `src/app.css`).
 - Use `!` suffix on utilities only as a last resort for specificity (e.g. `btn bg-red-500!`)
 - Component reference: https://daisyui.com/llms.txt
 
+## Design Language
+
+Full design system guidelines are in `.claude/skills/design-language/`. Key rules:
+
+- **DaisyUI `coffee` theme only** — use semantic colors exclusively, never raw Tailwind color names, no `dark:` variants
+- **Fully rounded shapes** — `rounded-full` for buttons/badges, `rounded-2xl`+ for cards/containers
+- **Warm and playful tone** — conversational button labels, friendly copy, approachable empty states
+
 ### Component Structure
 
 Order sections in Svelte files as:

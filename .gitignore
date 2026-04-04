@@ -9,7 +9,8 @@ node_modules
 /build
 
 # Claude Code
-.claude/
+.claude/settings.local.json
+.claude/memory/
 
 # OS
 .DS_Store

@@ -90,6 +90,16 @@ A Svelte MCP server is configured for this project, providing access to comprehe
 - Prefer Tailwind utility classes in markup over custom CSS
 - Use Svelte's scoped `<style>` block only for styles that cannot be expressed as utilities
 
+### DaisyUI 5
+
+UI components via daisyUI 5 (`@plugin "daisyui"` in `src/app.css`).
+
+- Use daisyUI semantic colors (`primary`, `base-100`, `error`, etc.) instead of Tailwind colors (`red-500`, `gray-800`) — semantic colors adapt to themes automatically, no `dark:` prefix needed
+- Pair backgrounds with their `*-content` counterpart (e.g. `bg-primary text-primary-content`)
+- Avoid Tailwind color names for text — `text-gray-800` on `bg-base-100` is unreadable on dark themes
+- Use `!` suffix on utilities only as a last resort for specificity (e.g. `btn bg-red-500!`)
+- Component reference: https://daisyui.com/llms.txt
+
 ### Component Structure
 
 Order sections in Svelte files as:

@@ -14,6 +14,9 @@ from typing import Annotated
 import typer
 
 from negative_space.console import configure_logging, console, logger
+from negative_space.extract import ExtractOptions
+from negative_space.extract import run as run_extraction
+from negative_space.nas import NasError
 
 app = typer.Typer(
     name="negative-space",
@@ -45,6 +48,69 @@ VerboseOption = Annotated[
         help="Emit debug-level detail about every step.",
     ),
 ]
+
+JobsOption = Annotated[
+    int,
+    typer.Option(
+        "--jobs",
+        "-j",
+        min=1,
+        help="How many archives to extract on the NAS at once.",
+    ),
+]
+
+RemoveArchivesOption = Annotated[
+    bool,
+    typer.Option(
+        "--remove-archives",
+        help="Delete each .tgz once it has extracted successfully (default: keep).",
+    ),
+]
+
+
+@app.command(
+    help=(
+        "Extract the takeout .tgz archives in TARGET on the NAS they live on.\n\n"
+        "The heavy lifting runs on the NAS over SSH, so nothing but progress text "
+        "crosses the network. Progress, throughput and ETA are shown per archive "
+        "and overall, and each finished archive is recorded so an interrupted run "
+        "resumes instead of starting over."
+    ),
+)
+def extract(
+    target: TargetArgument,
+    *,
+    jobs: JobsOption = 2,
+    remove_archives: RemoveArchivesOption = False,
+    verbose: VerboseOption = False,
+) -> None:
+    # No docstring: user-facing help comes from the decorator's ``help=`` so the
+    # Args/Raises detail devs would want does not leak into ``--help`` output.
+    configure_logging(verbose=verbose)
+    console.rule("[bold]negative-space · extract")
+    options = ExtractOptions(jobs=jobs, remove=remove_archives)
+
+    try:
+        summary = run_extraction(target, options=options)
+    except NasError as error:
+        # Expected, user-actionable failure — show the message, not a traceback.
+        logger.error("%s", error)
+        raise typer.Exit(code=1) from error
+
+    if not summary.archives:
+        logger.warning("No .tgz archives found in %s.", target)
+        return
+
+    logger.info(
+        "Done: %d extracted, %d failed, %d skipped (already done).",
+        len(summary.succeeded),
+        len(summary.failed),
+        len(summary.skipped),
+    )
+    if summary.failed:
+        for archive in summary.failed:
+            logger.error("Did not extract: %s", archive.name)
+        raise typer.Exit(code=1)
 
 
 def _summarise_entries(target: Path) -> tuple[int, int]:

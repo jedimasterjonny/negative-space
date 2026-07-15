@@ -10,6 +10,7 @@ authors = [
     { name = "jedimasterjonny", email = "46541898+jedimasterjonny@users.noreply.github.com" },
 ]
 dependencies = [
+    "pillow>=12.3.0",
     "pydantic-settings>=2.0",
     "rich>=15.0.0",
     "typer>=0.26.8",
@@ -75,7 +76,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "PLR2004", "SLF001", "ANN", "D"]
+"tests/**/*.py" = ["S101", "PLR2004", "SLF001", "ANN", "D", "PLC2701"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["negative_space"]

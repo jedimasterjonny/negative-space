@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,11 +20,14 @@ runner = CliRunner()
 # Box-drawing characters Rich uses for rules and error panels. Stripping them
 # lets us match wrapped, bordered text without caring where line breaks fall.
 _BOX = str.maketrans(dict.fromkeys("│╭╮╰╯─", " "))
+# ANSI escape sequences: Rich emits colour when the shared console has been put
+# in terminal mode by another test, so strip them to match styling-agnostically.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
 
 def _flatten(text: str) -> str:
     # Collapse Rich output to a single space-separated line for matching.
-    return " ".join(text.translate(_BOX).split())
+    return " ".join(_ANSI.sub("", text).translate(_BOX).split())
 
 
 def _archive(name: str, size: int = 10) -> Archive:

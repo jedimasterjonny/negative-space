@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from negative_space.archives import Archive
 from negative_space.extract import (
     STATE_FILENAME,
+    ArchiveOutcome,
     ExtractionState,
     ExtractOptions,
     RichProgressReporter,
@@ -89,9 +90,11 @@ def _archive(path: Path, size: int) -> Archive:
 def _fake_extractor(codes: dict[str, int] | None = None) -> Extractor:
     codes = codes or {}
 
-    def extract(archive: Archive, on_bytes: OnBytes) -> int:
+    def extract(archive: Archive, on_bytes: OnBytes) -> ArchiveOutcome:
         on_bytes(archive.size)
-        return codes.get(archive.name, 0)
+        code = codes.get(archive.name, 0)
+        tail = "" if code == 0 else f"boom in {archive.name}"
+        return ArchiveOutcome(exit_code=code, error_tail=tail)
 
     return extract
 
@@ -123,9 +126,9 @@ def test_run_ssh_extract_parses_progress_and_returns_zero(
 
     def fake_popen(argv: list[str]) -> _FakeProcess:
         argvs.append(argv)
-        return _FakeProcess(io.BytesIO(b"512 bytes copied\r1024 bytes copied\nrecords\n"), 0)
+        return _FakeProcess(io.BytesIO(b"512 bytes copied\r1024 bytes copied\n6+0 records in\n"), 0)
 
-    code = run_ssh_extract(
+    outcome = run_ssh_extract(
         "nas",
         PurePosixPath("/v/a.tgz"),
         PurePosixPath("/v"),
@@ -133,23 +136,32 @@ def test_run_ssh_extract_parses_progress_and_returns_zero(
         popen=fake_popen,
     )
 
-    assert code == 0
-    assert seen == [512, 1024]  # 'records' line ignored
+    assert outcome.exit_code == 0
+    assert outcome.ok
+    assert not outcome.error_tail  # discarded on success
+    assert seen == [512, 1024]
     assert argvs[0][0] == "/usr/bin/ssh"
     assert "dd if=/v/a.tgz" in argvs[0][-1]
 
 
-def test_run_ssh_extract_reads_trailing_line_and_returns_exit_code(
+def test_run_ssh_extract_captures_error_output_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/ssh")
     seen: list[int] = []
 
     def fake_popen(_argv: list[str]) -> _FakeProcess:
-        # No trailing newline: the final byte count lives in the leftover tail.
-        return _FakeProcess(io.BytesIO(b"records in\n4096 bytes copied"), 2)
+        # A progress line, dd's own "records" noise, a tar error, then a final
+        # gzip error with no trailing newline (so it lands in the leftover tail).
+        stderr = (
+            b"2048 bytes copied\r"
+            b"6+0 records in\n"
+            b"tar: /v/x: Cannot mkdir: Permission denied\n"
+            b"gzip: stdin: unexpected end of file"
+        )
+        return _FakeProcess(io.BytesIO(stderr), 2)
 
-    code = run_ssh_extract(
+    outcome = run_ssh_extract(
         "nas",
         PurePosixPath("/v/a.tgz"),
         PurePosixPath("/v"),
@@ -157,8 +169,12 @@ def test_run_ssh_extract_reads_trailing_line_and_returns_exit_code(
         popen=fake_popen,
     )
 
-    assert code == 2
-    assert seen == [4096]
+    assert outcome.exit_code == 2
+    assert not outcome.ok
+    assert seen == [2048]
+    assert "Cannot mkdir: Permission denied" in outcome.error_tail
+    assert "gzip: stdin: unexpected end of file" in outcome.error_tail
+    assert "records in" not in outcome.error_tail  # dd noise filtered out
 
 
 def test_run_ssh_extract_default_factory_spawns_ssh(
@@ -177,9 +193,9 @@ def test_run_ssh_extract_default_factory_spawns_ssh(
     seen: list[int] = []
 
     # No popen= argument, so the default _spawn factory (real subprocess) runs.
-    code = run_ssh_extract("nas", PurePosixPath("/v/a.tgz"), PurePosixPath("/v"), seen.append)
+    outcome = run_ssh_extract("nas", PurePosixPath("/v/a.tgz"), PurePosixPath("/v"), seen.append)
 
-    assert code == 0
+    assert outcome.exit_code == 0
     assert seen == [100]
     assert argvs[0][:4] == ["/usr/bin/ssh", "-o", "BatchMode=yes", "nas"]
     assert "dd if=/v/a.tgz" in argvs[0][-1]
@@ -196,18 +212,18 @@ def test_make_ssh_extractor_extracts_into_the_remote_dir(
         remote_archive: PurePosixPath,
         remote_target: PurePosixPath,
         on_bytes: OnBytes,
-    ) -> int:
+    ) -> ArchiveOutcome:
         calls.append((host, str(remote_archive), str(remote_target)))
         on_bytes(5)
-        return 0
+        return ArchiveOutcome(exit_code=0)
 
     monkeypatch.setattr("negative_space.extract.run_ssh_extract", fake_run_ssh_extract)
     extractor = make_ssh_extractor(RemoteLocation(host="nas", path=PurePosixPath("/volume1/s")))
     seen: list[int] = []
 
-    code = extractor(_archive(Path("/nfs/s/a.tgz"), 5), seen.append)
+    outcome = extractor(_archive(Path("/nfs/s/a.tgz"), 5), seen.append)
 
-    assert code == 0
+    assert outcome.exit_code == 0
     assert seen == [5]
     assert calls == [("nas", "/volume1/s/a.tgz", "/volume1/s")]
 
@@ -278,6 +294,7 @@ def test_extract_all_marks_a_failure_without_recording_it_done(tmp_path: Path) -
     by_name = {result.archive.name: result for result in results}
     assert by_name["good.tgz"].ok
     assert not by_name["bad.tgz"].ok
+    assert by_name["bad.tgz"].error_tail == "boom in bad.tgz"  # surfaced to the caller
     assert state.completed == {"good.tgz": 5}  # failure not persisted
     assert sorted(ok for _, ok in reporter.finished) == [False, True]
 

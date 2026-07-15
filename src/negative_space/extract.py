@@ -21,6 +21,7 @@ import re
 import shlex
 import subprocess  # noqa: S404 - only runs ssh with args built from mount config, never a shell
 import threading
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -58,11 +59,30 @@ STATE_FILENAME = ".negative-space-extract.json"
 
 _CHUNK = 65536
 _BYTES_RE = re.compile(rb"(\d+)\s+bytes")
+# dd writes "N+M records in/out" summary lines to the same stderr; not errors.
+_DD_NOISE = re.compile(rb"\d+\+\d+ records (in|out)")
+# How many trailing stderr lines to keep as context when an archive fails.
+_MAX_ERROR_LINES = 12
 
 #: Called with the running byte count for one archive.
 OnBytes = Callable[[int], None]
-#: Extracts one archive, reporting progress, and returns the process exit code.
-Extractor = Callable[[Archive, OnBytes], int]
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveOutcome:
+    """Result of one archive's extraction: its exit code and any error output."""
+
+    exit_code: int
+    error_tail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        """Whether the archive extracted cleanly."""
+        return self.exit_code == 0
+
+
+#: Extracts one archive, reporting progress, and returns its outcome.
+Extractor = Callable[[Archive, OnBytes], ArchiveOutcome]
 
 
 class _Process(Protocol):
@@ -105,6 +125,7 @@ class ExtractionResult:
 
     archive: Archive
     exit_code: int
+    error_tail: str = ""
 
     @property
     def ok(self) -> bool:
@@ -171,21 +192,28 @@ def build_remote_command(remote_archive: PurePosixPath, remote_target: PurePosix
     return f"mkdir -p {target} && dd if={archive} bs=8M status=progress | tar -xz -C {target}"
 
 
-def _pump_progress(stream: IO[bytes], on_bytes: OnBytes) -> None:
-    """Parse ``dd status=progress`` output, reporting each byte count seen.
+def _consume_segment(segment: bytes, on_bytes: OnBytes, on_error: Callable[[str], None]) -> None:
+    if match := _BYTES_RE.search(segment):
+        on_bytes(int(match.group(1)))
+    elif segment.strip() and not _DD_NOISE.search(segment):
+        on_error(segment.decode("utf-8", "replace"))
+
+
+def _pump_progress(stream: IO[bytes], on_bytes: OnBytes, on_error: Callable[[str], None]) -> None:
+    """Parse ``dd status=progress`` output line by line.
 
     ``dd`` rewrites its status line with carriage returns, so we split on
-    carriage returns and newlines rather than reading whole lines.
+    carriage returns and newlines rather than reading whole lines. Byte-count
+    lines drive progress; anything else that is not dd's own noise (i.e.
+    ``tar``/``gzip`` errors) is forwarded to ``on_error``.
     """
     tail = b""
     while chunk := stream.read(_CHUNK):
         segments = re.split(rb"[\r\n]", tail + chunk)
         tail = segments.pop()
         for segment in segments:
-            if match := _BYTES_RE.search(segment):
-                on_bytes(int(match.group(1)))
-    if match := _BYTES_RE.search(tail):
-        on_bytes(int(match.group(1)))
+            _consume_segment(segment, on_bytes, on_error)
+    _consume_segment(tail, on_bytes, on_error)
 
 
 def _spawn(argv: list[str]) -> _Process:
@@ -204,7 +232,7 @@ def run_ssh_extract(
     on_bytes: OnBytes,
     *,
     popen: Callable[[list[str]], _Process] = _spawn,
-) -> int:
+) -> ArchiveOutcome:
     """Extract one archive on ``host`` over SSH, feeding progress to ``on_bytes``.
 
     Args:
@@ -215,19 +243,22 @@ def run_ssh_extract(
         popen: Process factory (injectable for tests).
 
     Returns:
-        The remote pipeline's exit code (i.e. ``tar``'s).
+        The archive's outcome: the remote pipeline's exit code (i.e. ``tar``'s)
+        and, on failure, the last lines of ``tar``/``gzip`` stderr.
 
     Raises:
         RuntimeError: If the SSH process exposes no stderr pipe (should not happen).
     """
     argv = ssh_argv(host, build_remote_command(remote_archive, remote_target))
+    errors: deque[str] = deque(maxlen=_MAX_ERROR_LINES)
     with popen(argv) as process:
         stream = process.stderr
         if stream is None:  # pragma: no cover - stderr=PIPE always yields a stream
             msg = "ssh process did not provide a stderr pipe"
             raise RuntimeError(msg)
-        _pump_progress(stream, on_bytes)
-        return process.wait()
+        _pump_progress(stream, on_bytes, errors.append)
+        code = process.wait()
+    return ArchiveOutcome(exit_code=code, error_tail="" if code == 0 else "\n".join(errors))
 
 
 def make_ssh_extractor(remote: RemoteLocation) -> Extractor:
@@ -240,7 +271,7 @@ def make_ssh_extractor(remote: RemoteLocation) -> Extractor:
         An :data:`Extractor` that extracts archives into ``remote``.
     """
 
-    def extract(archive: Archive, on_bytes: OnBytes) -> int:
+    def extract(archive: Archive, on_bytes: OnBytes) -> ArchiveOutcome:
         return run_ssh_extract(remote.host, remote.path / archive.name, remote.path, on_bytes)
 
     return extract
@@ -324,8 +355,12 @@ def extract_all(
 
     def work(archive: Archive) -> ExtractionResult:
         handle = reporter.add_archive(archive.name, archive.size)
-        exit_code = extractor(archive, lambda seen: reporter.update(handle, seen))
-        result = ExtractionResult(archive=archive, exit_code=exit_code)
+        outcome = extractor(archive, lambda seen: reporter.update(handle, seen))
+        result = ExtractionResult(
+            archive=archive,
+            exit_code=outcome.exit_code,
+            error_tail=outcome.error_tail,
+        )
         reporter.finish(handle, ok=result.ok)
         return result
 
@@ -342,7 +377,13 @@ def extract_all(
                     result.archive.path.unlink()
                     logger.info("Removed %s", result.archive.name)
             else:
-                logger.error("FAILED %s (exit %d)", result.archive.name, result.exit_code)
+                detail = f": {result.error_tail}" if result.error_tail else ""
+                logger.error(
+                    "FAILED %s (exit %d)%s",
+                    result.archive.name,
+                    result.exit_code,
+                    detail,
+                )
     return results
 
 

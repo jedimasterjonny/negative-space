@@ -3,11 +3,11 @@ from __future__ import annotations
 import pytest
 
 from negative_space.pairing import (
+    expected_sidecars,
     is_image,
     is_video,
     motion_still,
     pair_directory,
-    sidecar_candidates,
 )
 
 
@@ -31,20 +31,32 @@ def test_extension_classification(name: str, kind: str) -> None:
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("IMG_1.jpg.supplemental-metadata.json", ["IMG_1.jpg"]),
-        ("IMG_1.jpg.supplemental-metad.json", ["IMG_1.jpg"]),  # truncated
-        ("IMG_1.jpg.supplement.json", ["IMG_1.jpg"]),  # heavily truncated
-        # duplicate marker -> the "(N)" media first, base as fallback
-        ("IMG_1.jpg.supplemental-metadata(1).json", ["IMG_1(1).jpg", "IMG_1.jpg"]),
-        ("PXL_2.MP.jpg.supplemental-met.json", ["PXL_2.MP.jpg"]),  # motion still sidecar
-        ("metadata.json", []),  # album metadata, not a sidecar
-        ("IMG_1.jpg", []),  # a media file
-        ("shared_album_comments.json", []),  # root special file
-        (".supplemental-metadata.json", []),  # no media prefix
+        # short name: the full, untruncated sidecar
+        ("IMG_1.jpg", ["IMG_1.jpg.supplemental-metadata.json"]),
+        # long name: truncated to 51 chars, cutting even ".jpg" down to ".jp"
+        (
+            "PXL_20201119_165135173.PORTRAIT-02.ORIGINAL.jpg",
+            ["PXL_20201119_165135173.PORTRAIT-02.ORIGINAL.jp.json"],
+        ),
+        # numbered duplicate: its own name first, then the base name's "(N)" sidecar
+        (
+            "COLOR(1).jpg",
+            [
+                "COLOR(1).jpg.supplemental-metadata.json",
+                "COLOR.jpg.supplemental-metadata(1).json",
+            ],
+        ),
     ],
 )
-def test_sidecar_candidates(name: str, expected: list[str]) -> None:
-    assert sidecar_candidates(name) == expected
+def test_expected_sidecars(name: str, expected: list[str]) -> None:
+    assert expected_sidecars(name) == expected
+
+
+def test_expected_sidecars_numbered_duplicate_appends_after_truncation() -> None:
+    # The base sidecar is truncated to the limit first, then "(N)" is appended --
+    # so the "(N)" name can legitimately exceed the limit.
+    cands = expected_sidecars("PXL_20201104_072546224(1).jpg")
+    assert "PXL_20201104_072546224.jpg.supplemental-metada(1).json" in cands
 
 
 def test_motion_still_same_base_rule() -> None:
@@ -66,22 +78,18 @@ def test_pair_directory_full_folder() -> None:
         # plain still + sidecar
         "IMG_1.jpg",
         "IMG_1.jpg.supplemental-metadata.json",
-        # still with a duplicate (N) sidecar -> the non-(N) one is chosen
-        "COLOR.jpg",
-        "COLOR.jpg.supplemental-metadata.json",
-        "COLOR.jpg.supplemental-metadata(1).json",
         # MVIMG motion photo: same-base video half
         "MVIMG_2.jpg",
         "MVIMG_2.jpg.supplemental-metadata.json",
         "MVIMG_2.MP4",
         # PXL motion photo: still named after the whole video
         "PXL_3.MP.jpg",
-        "PXL_3.MP.jpg.supplemental-me.json",  # truncated sidecar
+        "PXL_3.MP.jpg.supplemental-metadata.json",
         "PXL_3.MP",
         # standalone (real) video with its own sidecar
         "VID_4.mp4",
         "VID_4.mp4.supplemental-metadata.json",
-        # album metadata + an orphan sidecar
+        # album metadata + an orphan sidecar (its media is gone)
         "metadata.json",
         "GHOST.jpg.supplemental-metadata.json",
     ]
@@ -93,27 +101,35 @@ def test_pair_directory_full_folder() -> None:
     assert {entry.name for entry in result.motion_videos} == {"MVIMG_2.MP4", "PXL_3.MP"}
     assert by_name["MVIMG_2.MP4"].motion_still == "MVIMG_2.jpg"
     assert by_name["PXL_3.MP"].motion_still == "PXL_3.MP.jpg"
-    # Motion halves carry no sidecar of their own.
-    assert by_name["MVIMG_2.MP4"].sidecar is None
+    assert by_name["MVIMG_2.MP4"].sidecar is None  # motion halves carry no sidecar
 
     # Keepers: stills + the standalone video (not the motion halves).
     assert {entry.name for entry in result.keepers} == {
         "IMG_1.jpg",
-        "COLOR.jpg",
         "MVIMG_2.jpg",
         "PXL_3.MP.jpg",
         "VID_4.mp4",
     }
 
-    # Sidecars resolved, including truncated names and the standalone video.
     assert by_name["IMG_1.jpg"].sidecar == "IMG_1.jpg.supplemental-metadata.json"
-    assert by_name["PXL_3.MP.jpg"].sidecar == "PXL_3.MP.jpg.supplemental-me.json"
+    assert by_name["PXL_3.MP.jpg"].sidecar == "PXL_3.MP.jpg.supplemental-metadata.json"
     assert by_name["VID_4.mp4"].sidecar == "VID_4.mp4.supplemental-metadata.json"
-    # Duplicate (N) sidecar: the clean one wins.
-    assert by_name["COLOR.jpg"].sidecar == "COLOR.jpg.supplemental-metadata.json"
 
     assert result.orphan_sidecars == ("GHOST.jpg.supplemental-metadata.json",)
     assert result.other == ("metadata.json",)
+
+
+def test_pair_directory_matches_hard_truncated_sidecar() -> None:
+    # A long media name: the sidecar is truncated so far that ".jpg" -> ".jp"
+    # and "supplemental-metadata" vanishes entirely.
+    media = "PXL_20201119_165135173.PORTRAIT-02.ORIGINAL.jpg"
+    sidecar = "PXL_20201119_165135173.PORTRAIT-02.ORIGINAL.jp.json"
+
+    result = pair_directory([media, sidecar])
+
+    (entry,) = result.entries
+    assert entry.sidecar == sidecar
+    assert result.orphan_sidecars == ()
 
 
 def test_pair_directory_resolves_numbered_duplicate_to_numbered_media() -> None:
@@ -131,19 +147,4 @@ def test_pair_directory_resolves_numbered_duplicate_to_numbered_media() -> None:
 
     assert by_name["COLOR.jpg"].sidecar == "COLOR.jpg.supplemental-metadata.json"
     assert by_name["COLOR(1).jpg"].sidecar == "COLOR.jpg.supplemental-metadata(1).json"
-    assert result.orphan_sidecars == ()
-
-
-def test_pair_directory_prefers_least_truncated_sidecar() -> None:
-    # Two non-"(N)" sidecars for one still: the longer (least truncated) wins.
-    names = [
-        "A.jpg",
-        "A.jpg.supplement.json",
-        "A.jpg.supplemental-metadata.json",
-    ]
-
-    result = pair_directory(names)
-
-    (entry,) = result.entries
-    assert entry.sidecar == "A.jpg.supplemental-metadata.json"
     assert result.orphan_sidecars == ()

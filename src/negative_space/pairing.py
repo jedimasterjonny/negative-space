@@ -20,7 +20,6 @@ and drop the motion-photo video halves.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
@@ -37,9 +36,23 @@ VIDEO_EXTS: Final = frozenset(
     {".mp4", ".mov", ".m4v", ".mp", ".3gp", ".avi", ".mkv", ".mts", ".mpg", ".mpeg"},
 )
 
-# ".supplement" + a (possibly truncated) tail of "al-metadata", an optional
-# "(N)" duplicate marker, then ".json". Matches every observed variant.
-_SIDECAR_TAIL: Final = re.compile(r"\.supplement[a-z-]*(?:\(\d+\))?\.json$", re.IGNORECASE)
+# Google appends ".supplemental-metadata.json" to the media name, then truncates
+# the whole result to a hard character limit -- cutting the suffix (and even the
+# media extension) from the right while always keeping a trailing ".json". So a
+# sidecar name is derived *forwards* from its media file, not parsed back.
+_SIDECAR_SUFFIX: Final = ".supplemental-metadata"
+_SIDECAR_LIMIT: Final = 51
+# Trailing "(N)" duplicate marker before an extension, e.g. "photo(1).jpg".
+_NUMBERED: Final = re.compile(r"^(.*)\((\d+)\)(\.[^.]+)$")
+# JSON files that are not per-photo sidecars.
+_SPECIAL_JSON: Final = frozenset(
+    {
+        "metadata.json",
+        "shared_album_comments.json",
+        "user-generated-memory-titles.json",
+        "print-subscriptions.json",
+    },
+)
 
 
 def extension(name: str) -> str:
@@ -57,34 +70,34 @@ def is_video(name: str) -> bool:
     return extension(name) in VIDEO_EXTS
 
 
-_DUP_MARKER: Final = re.compile(r"\((\d+)\)\.json$")
+def _truncate_sidecar(stem: str) -> str:
+    full = f"{stem}.json"
+    if len(full) <= _SIDECAR_LIMIT:
+        return full
+    return stem[: _SIDECAR_LIMIT - len(".json")] + ".json"
 
 
-def sidecar_candidates(name: str) -> list[str]:
-    """Return the media file names a Takeout sidecar could describe, best first.
+def expected_sidecars(name: str) -> list[str]:
+    """Return the sidecar file names a media file's metadata could live in.
 
-    A ``(N)`` duplicate marker sits on the JSON but belongs to a ``(N)`` media
-    file: ``photo.jpg.supplemental-metadata(1).json`` is the metadata for
-    ``photo(1).jpg``, falling back to ``photo.jpg`` when no such duplicate exists
-    (Takeout also emits genuine duplicate sidecars on the base name).
+    The sidecar is ``<media>.supplemental-metadata.json`` truncated to Takeout's
+    length limit. A numbered duplicate ``photo(1).jpg`` has its metadata under the
+    base name's JSON with the marker appended *after* truncation (so the ``(N)``
+    is preserved even when it pushes the name past the limit):
+    ``photo.jpg.supplemental-metadata(1).json``.
 
     Args:
-        name: A file name.
+        name: A media file name.
 
     Returns:
-        Candidate media names, most specific first, or an empty list if ``name``
-        is not a per-photo sidecar (album ``metadata.json``, media, other files).
+        Candidate sidecar file names, most specific first.
     """
-    match = _SIDECAR_TAIL.search(name)
-    if match is None or match.start() == 0:
-        return []
-    base = name[: match.start()]
-    candidates: list[str] = []
-    dup = _DUP_MARKER.search(name)
+    candidates = [_truncate_sidecar(name + _SIDECAR_SUFFIX)]
+    dup = _NUMBERED.match(name)
     if dup is not None:
-        base_path = PurePosixPath(base)
-        candidates.append(f"{base_path.stem}({dup.group(1)}){base_path.suffix}")
-    candidates.append(base)
+        base = f"{dup.group(1)}{dup.group(3)}"
+        base_sidecar = _truncate_sidecar(base + _SIDECAR_SUFFIX)
+        candidates.append(f"{base_sidecar[:-5]}({dup.group(2)}).json")
     return candidates
 
 
@@ -105,13 +118,6 @@ def motion_still(video: str, image_stems: dict[str, str]) -> str | None:
         name, or the still named after the whole video), else ``None``.
     """
     return image_stems.get(_stem(video).lower()) or image_stems.get(video.lower())
-
-
-def _pick_sidecar(candidates: list[str]) -> str | None:
-    if not candidates:
-        return None
-    # Prefer a non-"(N)" name, then the least-truncated (longest) one.
-    return min(candidates, key=lambda name: ("(" in name, -len(name)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,39 +164,42 @@ def pair_directory(names: Iterable[str]) -> DirectoryPairing:
         The structured pairing for that folder.
     """
     names = list(names)
+    name_set = set(names)
     images = [name for name in names if is_image(name)]
     videos = [name for name in names if is_video(name)]
-    media_set = {*images, *videos}
-
-    sidecars_by_target: dict[str, list[str]] = defaultdict(list)
-    other: list[str] = []
-    orphans: list[str] = []
-    for name in names:
-        if name in media_set:
-            continue
-        candidates = sidecar_candidates(name)
-        if not candidates:
-            other.append(name)
-            continue
-        target = next((c for c in candidates if c in media_set), None)
-        if target is None:
-            orphans.append(name)
-        else:
-            sidecars_by_target[target].append(name)
-
     image_stems = {_stem(image).lower(): image for image in images}
 
-    entries = tuple(
-        MediaEntry(
-            name=name,
-            is_video=is_video(name),
-            sidecar=_pick_sidecar(sidecars_by_target.get(name, [])),
-            motion_still=motion_still(name, image_stems) if is_video(name) else None,
+    claimed: set[str] = set()
+    entries: list[MediaEntry] = []
+    for name in (*images, *videos):
+        video = is_video(name)
+        sidecar = next(
+            (cand for cand in expected_sidecars(name) if cand in name_set and cand not in claimed),
+            None,
         )
-        for name in (*images, *videos)
-    )
+        if sidecar is not None:
+            claimed.add(sidecar)
+        entries.append(
+            MediaEntry(
+                name=name,
+                is_video=video,
+                sidecar=sidecar,
+                motion_still=motion_still(name, image_stems) if video else None,
+            ),
+        )
+
+    media_set = {*images, *videos}
+    orphans: list[str] = []
+    other: list[str] = []
+    for name in names:
+        if name in media_set or name in claimed:
+            continue
+        if name.endswith(".json") and name not in _SPECIAL_JSON:
+            orphans.append(name)
+        else:
+            other.append(name)
     return DirectoryPairing(
-        entries=entries,
+        entries=tuple(entries),
         orphan_sidecars=tuple(sorted(orphans)),
         other=tuple(sorted(other)),
     )

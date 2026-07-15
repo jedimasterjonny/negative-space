@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:best-practices", ":automergeMinor"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "reviewers": ["jedimasterjonny"]
+    },
+    {
+      "matchUpdateTypes": ["pinDigest", "digest"],
+      "automerge": true,
+      "automergeType": "branch"
+    }
+  ],
+  "pre-commit": {
+    "enabled": true
+  }
+}

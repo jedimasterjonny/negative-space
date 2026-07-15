@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from negative_space.pairing import (
+    edited_original,
     expected_sidecars,
     is_image,
     is_video,
@@ -71,6 +72,44 @@ def test_motion_still_named_after_whole_video_rule() -> None:
 
 def test_motion_still_standalone_video_returns_none() -> None:
     assert motion_still("VID.mp4", {"other": "other.jpg"}) is None
+
+
+_LONG = "PXL_20201105_160816198.PORTRAIT-02.ORIGINAL"
+
+
+@pytest.mark.parametrize(
+    ("name", "media", "expected"),
+    [
+        ("IMG_1-edited.jpg", {"IMG_1.jpg", "IMG_1-edited.jpg"}, "IMG_1.jpg"),
+        # long name: "-edited" was truncated to "-edi" to fit the limit
+        (f"{_LONG}-edi.jpg", {f"{_LONG}.jpg", f"{_LONG}-edi.jpg"}, f"{_LONG}.jpg"),
+        # a short "-e" ending is not a truncated "-edited"
+        ("cafe-e.jpg", {"cafe.jpg", "cafe-e.jpg"}, None),
+        # edited copy whose original is not present
+        ("LONE-edited.jpg", {"LONE-edited.jpg"}, None),
+        ("holiday.jpg", {"holiday.jpg"}, None),  # not an edit
+        ("no_extension", set(), None),  # nothing to strip
+    ],
+)
+def test_edited_original(name: str, media: set[str], expected: str | None) -> None:
+    assert edited_original(name, media) == expected
+
+
+def test_pair_directory_links_edited_copy_to_its_original() -> None:
+    names = [
+        "IMG_1.jpg",
+        "IMG_1.jpg.supplemental-metadata.json",
+        "IMG_1-edited.jpg",  # an edit: no sidecar of its own
+        "RANDOM.jpg",  # no sidecar, not an edit
+    ]
+
+    result = pair_directory(names)
+    by_name = {entry.name: entry for entry in result.entries}
+
+    assert by_name["IMG_1-edited.jpg"].sidecar is None
+    assert by_name["IMG_1-edited.jpg"].original == "IMG_1.jpg"
+    assert by_name["IMG_1.jpg"].original is None  # has its own sidecar
+    assert by_name["RANDOM.jpg"].original is None  # no sidecar, but not an edit
 
 
 def test_pair_directory_full_folder() -> None:

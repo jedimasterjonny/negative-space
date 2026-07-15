@@ -42,6 +42,10 @@ VIDEO_EXTS: Final = frozenset(
 # sidecar name is derived *forwards* from its media file, not parsed back.
 _SIDECAR_SUFFIX: Final = ".supplemental-metadata"
 _SIDECAR_LIMIT: Final = 51
+# Suffix Google appends to an edited copy (English exports), before the extension
+# and truncated to the same limit, e.g. "...ORIGINAL-edited.jpg" -> "...-edi.jpg".
+# An edited copy has no sidecar of its own and inherits the original's metadata.
+_EDITED_SUFFIX: Final = "-edited"
 # Trailing "(N)" duplicate marker before an extension, e.g. "photo(1).jpg".
 _NUMBERED: Final = re.compile(r"^(.*)\((\d+)\)(\.[^.]+)$")
 # JSON files that are not per-photo sidecars.
@@ -106,6 +110,34 @@ def _stem(name: str) -> str:
     return name[: -len(ext)] if ext else name
 
 
+def edited_original(name: str, media_set: set[str]) -> str | None:
+    """Return the original a ``-edited`` copy derives from, if present.
+
+    Args:
+        name: A media file name.
+        media_set: All media file names in the same folder.
+
+    Returns:
+        The original's file name (``name`` with the ``-edited`` suffix removed,
+        allowing for length-truncated forms like ``-edi``), or ``None``.
+    """
+    stem, _, ext = name.rpartition(".")
+    if not stem:
+        return None
+    ext = f".{ext}"
+    for length in range(len(_EDITED_SUFFIX), 1, -1):
+        if not stem.endswith(_EDITED_SUFFIX[:length]):
+            continue
+        # A partial "-edited" only occurs when the full suffix would overflow.
+        full_length = len(stem) - length + len(_EDITED_SUFFIX) + len(ext)
+        if length < len(_EDITED_SUFFIX) and full_length <= _SIDECAR_LIMIT:
+            continue
+        original = stem[:-length] + ext
+        if original in media_set:
+            return original
+    return None
+
+
 def motion_still(video: str, image_stems: dict[str, str]) -> str | None:
     """Return the still a motion-photo video belongs to, if any.
 
@@ -122,12 +154,13 @@ def motion_still(video: str, image_stems: dict[str, str]) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class MediaEntry:
-    """A media file with its resolved sidecar and motion-photo status."""
+    """A media file with its resolved sidecar, motion-photo and edit status."""
 
     name: str
     is_video: bool
     sidecar: str | None
     motion_still: str | None
+    original: str | None = None
 
     @property
     def is_motion_video(self) -> bool:
@@ -168,6 +201,7 @@ def pair_directory(names: Iterable[str]) -> DirectoryPairing:
     images = [name for name in names if is_image(name)]
     videos = [name for name in names if is_video(name)]
     image_stems = {_stem(image).lower(): image for image in images}
+    media_set = {*images, *videos}
 
     claimed: set[str] = set()
     entries: list[MediaEntry] = []
@@ -185,10 +219,10 @@ def pair_directory(names: Iterable[str]) -> DirectoryPairing:
                 is_video=video,
                 sidecar=sidecar,
                 motion_still=motion_still(name, image_stems) if video else None,
+                original=None if sidecar else edited_original(name, media_set),
             ),
         )
 
-    media_set = {*images, *videos}
     orphans: list[str] = []
     other: list[str] = []
     for name in names:

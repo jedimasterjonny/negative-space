@@ -134,6 +134,10 @@ def _render_report(summary: PlanSummary, plan: LibraryPlan) -> None:
         f"[bold]{summary.motion_count:,}[/] motion-photo videos to drop "
         f"([bold]{summary.motion_bytes / 1e9:.1f} GB[/] reclaimed)",
     )
+    console.print(
+        f"[bold]{summary.duplicate_count:,}[/] duplicate copies to drop "
+        f"([bold]{summary.duplicate_bytes / 1e9:.1f} GB[/] reclaimed, verified by hash on apply)",
+    )
     console.print(f"[bold]{summary.undated:,}[/] undated → unsorted/")
 
     sources = Table(title="metadata source", title_justify="left", show_edge=False)

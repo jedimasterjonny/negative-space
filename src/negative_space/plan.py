@@ -30,10 +30,11 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Keeper:
-    """A media file to keep, with its resolved metadata."""
+    """A media file to keep, with its resolved metadata and size."""
 
     source: Path
     is_video: bool
+    size: int
     metadata: PhotoMetadata
     source_tag: MetadataSource
 
@@ -44,6 +45,15 @@ class Drop:
 
     source: Path
     size: int
+
+
+@dataclass(frozen=True, slots=True)
+class Duplicate:
+    """A redundant copy of a kept file (same name and size in another album)."""
+
+    source: Path
+    size: int
+    kept: Path  # the copy being kept; apply verifies ``source`` is byte-identical to it
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +72,8 @@ class LibraryPlan:
     """The whole planned reorganisation."""
 
     placements: tuple[Placement, ...]
-    drops: tuple[Drop, ...]
+    motion_drops: tuple[Drop, ...]
+    duplicate_drops: tuple[Duplicate, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,19 +88,41 @@ class PlanSummary:
     by_year: dict[int, int]
     motion_count: int
     motion_bytes: int
+    duplicate_count: int
+    duplicate_bytes: int
 
 
-def build_plan(keepers: Iterable[Keeper], drops: Iterable[Drop]) -> LibraryPlan:
-    """Assign every keeper a destination and collect the motion-video drops.
+def _dedupe(keepers: list[Keeper]) -> tuple[list[Keeper], list[Duplicate]]:
+    # Album-duplicates share a name and size across folders; keep one per group.
+    kept_by_key: dict[tuple[str, int], Keeper] = {}
+    unique: list[Keeper] = []
+    duplicates: list[Duplicate] = []
+    for keeper in sorted(keepers, key=lambda item: str(item.source)):  # deterministic winner
+        key = (keeper.source.name, keeper.size)
+        winner = kept_by_key.get(key)
+        if winner is None:
+            kept_by_key[key] = keeper
+            unique.append(keeper)
+        else:
+            duplicates.append(Duplicate(keeper.source, keeper.size, winner.source))
+    return unique, duplicates
+
+
+def build_plan(keepers: Iterable[Keeper], motion: Iterable[Drop]) -> LibraryPlan:
+    """Deduplicate keepers, assign destinations, and collect the drops.
+
+    Album-duplicates (same name and size in more than one album) are reduced to
+    one copy; the rest become :class:`Duplicate` drops for the apply step to
+    hash-verify before deleting.
 
     Args:
-        keepers: Media files to keep, with resolved metadata.
-        drops: Motion-photo videos to delete.
+        keepers: Media files to keep, with resolved metadata and sizes.
+        motion: Motion-photo videos to delete.
 
     Returns:
-        The library plan with collision-free destinations.
+        The library plan: collision-free destinations, motion drops, duplicates.
     """
-    keepers = list(keepers)
+    unique, duplicates = _dedupe(list(keepers))
     items = [
         PlanItem(
             key=str(keeper.source),
@@ -97,7 +130,7 @@ def build_plan(keepers: Iterable[Keeper], drops: Iterable[Drop]) -> LibraryPlan:
             extension=keeper.source.suffix,
             fallback_name=keeper.source.name,
         )
-        for keeper in keepers
+        for keeper in unique
     ]
     destinations = plan_moves(items)
     placements = tuple(
@@ -108,9 +141,13 @@ def build_plan(keepers: Iterable[Keeper], drops: Iterable[Drop]) -> LibraryPlan:
             metadata=keeper.metadata,
             source_tag=keeper.source_tag,
         )
-        for keeper in keepers
+        for keeper in unique
     )
-    return LibraryPlan(placements=placements, drops=tuple(drops))
+    return LibraryPlan(
+        placements=placements,
+        motion_drops=tuple(motion),
+        duplicate_drops=tuple(duplicates),
+    )
 
 
 def summarize(plan: LibraryPlan) -> PlanSummary:
@@ -135,8 +172,10 @@ def summarize(plan: LibraryPlan) -> PlanSummary:
         undated=sum(1 for placement in plan.placements if placement.metadata.taken_at is None),
         by_source=dict(by_source),
         by_year=dict(sorted(by_year.items())),
-        motion_count=len(plan.drops),
-        motion_bytes=sum(drop.size for drop in plan.drops),
+        motion_count=len(plan.motion_drops),
+        motion_bytes=sum(drop.size for drop in plan.motion_drops),
+        duplicate_count=len(plan.duplicate_drops),
+        duplicate_bytes=sum(duplicate.size for duplicate in plan.duplicate_drops),
     )
 
 
@@ -168,8 +207,9 @@ def _scan_dir(root_and_files: tuple[Path, list[str]]) -> tuple[list[Keeper], lis
     keepers = []
     for entry in pairing.keepers:
         resolved_entry = by_name[entry.name]
+        path = root / entry.name
         keeper = Keeper(
-            root / entry.name, entry.is_video, resolved_entry.metadata, resolved_entry.source
+            path, entry.is_video, _size(path), resolved_entry.metadata, resolved_entry.source
         )
         keepers.append(keeper)
     drops = [Drop(root / entry.name, _size(root / entry.name)) for entry in pairing.motion_videos]

@@ -65,6 +65,7 @@ def test_organise_dry_run_reports_the_plan(
         Keeper(
             tmp_path / "a.jpg",
             is_video=False,
+            size=1000,
             metadata=PhotoMetadata(when),
             source_tag=MetadataSource.SIDECAR,
         ),

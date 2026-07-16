@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from negative_space.metadata import MetadataSource, PhotoMetadata
 from negative_space.plan import (
     Drop,
+    Duplicate,
     Keeper,
     _load_json,
     _size,
@@ -20,9 +21,9 @@ _SEPT = PurePosixPath("2019", "09 - September")
 
 
 def _keeper(
-    name: str, *, video: bool, when: datetime.datetime | None, tag: MetadataSource
+    name: str, *, video: bool, when: datetime.datetime | None, tag: MetadataSource, size: int = 0
 ) -> Keeper:
-    return Keeper(Path("/t") / name, video, PhotoMetadata(taken_at=when), tag)
+    return Keeper(Path("/t") / name, video, size, PhotoMetadata(taken_at=when), tag)
 
 
 def _plan():
@@ -41,7 +42,23 @@ def test_build_plan_places_and_drops() -> None:
     assert destinations[Path("/t/a.jpg")] == _SEPT / "2019-09-27 11-47-23.jpg"
     assert destinations[Path("/t/v.mp4")] == _SEPT / "2019-09-27 11-47-30.mp4"
     assert destinations[Path("/t/latest.png")] == PurePosixPath("unsorted", "latest.png")
-    assert plan.drops == (Drop(Path("/t/m.mp4"), 1000),)
+    assert plan.motion_drops == (Drop(Path("/t/m.mp4"), 1000),)
+    assert plan.duplicate_drops == ()
+
+
+def test_build_plan_dedupes_by_name_and_size() -> None:
+    # Same name + size in two albums -> one kept, the other a duplicate drop.
+    sid = MetadataSource.SIDECAR
+    album = _keeper("Album/p.jpg", video=False, when=_WHEN, tag=sid, size=500)
+    year = _keeper("Year/p.jpg", video=False, when=_WHEN, tag=sid, size=500)
+    # A same-name file of a different size is NOT a duplicate.
+    other = _keeper("Other/p.jpg", video=False, when=_WHEN, tag=sid, size=999)
+
+    plan = build_plan([year, album, other], [])
+
+    placed = {placement.source for placement in plan.placements}
+    assert placed == {Path("/t/Album/p.jpg"), Path("/t/Other/p.jpg")}  # winner is sorted-first
+    assert plan.duplicate_drops == (Duplicate(Path("/t/Year/p.jpg"), 500, Path("/t/Album/p.jpg")),)
 
 
 def test_summarize() -> None:
@@ -53,6 +70,7 @@ def test_summarize() -> None:
     assert summary.by_year == {2019: 2}
     assert summary.motion_count == 1
     assert summary.motion_bytes == 1000
+    assert (summary.duplicate_count, summary.duplicate_bytes) == (0, 0)
 
 
 def test_load_json(tmp_path: Path) -> None:

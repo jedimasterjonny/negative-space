@@ -71,3 +71,13 @@ def test_plan_moves_is_order_independent() -> None:
     second = PlanItem("b", when, ".jpg", "b.jpg")
 
     assert plan_moves([first, second]) == plan_moves([second, first])
+
+
+def test_plan_moves_routes_bmp_to_unsorted_even_when_dated() -> None:
+    # BMP has no metadata container, so it can't be dated in place -> unsorted.
+    when = datetime.datetime(2019, 9, 27, 11, 47, 23, tzinfo=_UTC)
+    item = PlanItem("src/wallpaper.bmp", when, ".bmp", "wallpaper.bmp")
+
+    moves = plan_moves([item])
+
+    assert moves == {"src/wallpaper.bmp": PurePosixPath("unsorted", "wallpaper.bmp")}

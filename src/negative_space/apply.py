@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from negative_space.nas import NasError, resolve_remote, ssh_argv
+from negative_space.organise import UNSORTED
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -62,8 +63,9 @@ def build_manifest(
     """Lower a plan to NAS-local operations for the executor.
 
     Each placement becomes a ``photo`` (exiftool rewrite + move + mtime),
-    ``video`` (move + mtime) or ``undated`` (move as-is) op; each drop becomes a
-    ``motion`` (delete) or ``duplicate`` (hash-verify then delete) op.
+    ``video`` (move + mtime) or ``undated`` (move as-is, for anything in
+    ``unsorted/`` -- undated files or BMPs exiftool can't rewrite) op; each drop
+    becomes a ``motion`` (delete) or ``duplicate`` (hash-verify then delete) op.
 
     Drops are emitted *before* placements: a duplicate is hash-verified against
     the copy being kept, and that copy is itself a placement whose move (and
@@ -87,7 +89,9 @@ def build_manifest(
         src = to_nas(placement.source)
         dst = output_root + "/" + placement.destination.as_posix()
         taken = placement.metadata.taken_at
-        if taken is None:
+        # Anything routed to unsorted/ (undated, or a format exiftool can't
+        # rewrite like BMP) is moved as-is; only dated, rewritable media is dated.
+        if taken is None or placement.destination.is_relative_to(UNSORTED):
             ops.append({"kind": "undated", "src": src, "dst": dst})
         elif placement.is_video:
             ops.append({"kind": "video", "src": src, "dst": dst, "mtime": _epoch(taken)})

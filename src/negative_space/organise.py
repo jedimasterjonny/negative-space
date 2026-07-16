@@ -31,8 +31,11 @@ _MONTHS: Final = (
     "November",
     "December",
 )
-#: Top-level folder for files with no resolved date.
+#: Top-level folder for files with no resolved date (or that can't be rewritten).
 UNSORTED: Final = PurePosixPath("unsorted")
+#: Image formats exiftool cannot write metadata to, so they can't be dated in
+#: place -- they go to ``unsorted/`` as-is rather than a dated folder.
+NON_REWRITABLE: Final = frozenset({".bmp"})
 _STEM_FORMAT: Final = "%Y-%m-%d %H-%M-%S"
 
 
@@ -52,10 +55,16 @@ def capture_folder(taken_at: datetime.datetime) -> PurePosixPath:
     return PurePosixPath(f"{taken_at.year:04d}", month)
 
 
+def _dated(item: PlanItem) -> bool:
+    # Placed in a dated folder only with a date *and* a rewritable format;
+    # otherwise it can't be dated in place, so it goes to unsorted as-is.
+    return item.taken_at is not None and item.extension.lower() not in NON_REWRITABLE
+
+
 def _base(item: PlanItem) -> tuple[PurePosixPath, str, str]:
-    if item.taken_at is not None:
-        stem = item.taken_at.strftime(_STEM_FORMAT)
-        return capture_folder(item.taken_at), stem, item.extension.lower()
+    taken = item.taken_at
+    if taken is not None and item.extension.lower() not in NON_REWRITABLE:
+        return capture_folder(taken), taken.strftime(_STEM_FORMAT), item.extension.lower()
     original = PurePosixPath(item.fallback_name)
     return UNSORTED, original.stem, original.suffix
 
@@ -85,8 +94,8 @@ def plan_moves(items: Iterable[PlanItem]) -> dict[str, PurePosixPath]:
         the library root.
     """
     items = list(items)
-    dated = [item for item in items if item.taken_at is not None]
-    undated = [item for item in items if item.taken_at is None]
+    dated = [item for item in items if _dated(item)]
+    undated = [item for item in items if not _dated(item)]
     dated.sort(key=lambda item: (item.taken_at, item.key))
     undated.sort(key=lambda item: (item.fallback_name, item.key))
 

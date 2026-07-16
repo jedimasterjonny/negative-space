@@ -198,6 +198,7 @@ def test_read_capture_unknown_type(tmp_path: Path) -> None:
         (b"GIF89a" + b"\x00" * 6, ".gif"),
         (b"RIFF\x00\x00\x00\x00WEBP", ".webp"),
         (b"II*\x00" + b"\x00" * 8, ".tiff"),
+        (b"BM\x8a\x00" + b"\x00" * 8, ".bmp"),
         (b"\x00\x00\x00\x18ftypheic", ".heic"),
         (b"\x00\x00\x00\x18ftypmif1", ".heic"),
         (b"\x00\x00\x00\x18ftypavif", ".avif"),

@@ -49,6 +49,7 @@ _SIGNATURES: Final = (
     (b"GIF89a", ".gif"),
     (b"II*\x00", ".tiff"),
     (b"MM\x00*", ".tiff"),
+    (b"BM", ".bmp"),
 )
 
 _EXIF_IFD: Final = 0x8769

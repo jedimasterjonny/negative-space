@@ -116,6 +116,26 @@ def test_build_manifest_verifies_duplicates_before_moving_their_keeper() -> None
     assert kinds.index("duplicate") < kinds.index("photo")
 
 
+def test_build_manifest_moves_dated_bmp_in_unsorted_as_is() -> None:
+    # A dated BMP the plan routed to unsorted/ is moved as-is, not rewritten
+    # (exiftool can't write BMP metadata).
+    plan = LibraryPlan(
+        placements=(
+            _placement(
+                "wallpaper.bmp", "unsorted/wallpaper.bmp", video=False, meta=PhotoMetadata(_WHEN)
+            ),
+        ),
+        motion_drops=(),
+        duplicate_drops=(),
+    )
+
+    (op,) = build_manifest(plan, output_root="/lib", to_nas=_to_nas)
+
+    assert op["kind"] == "undated"  # move-as-is, despite having a date
+    assert op["dst"] == "/lib/unsorted/wallpaper.bmp"
+    assert "taken" not in op  # no exiftool rewrite
+
+
 def test_build_manifest_omits_gps_when_absent() -> None:
     plan = LibraryPlan(
         placements=(

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from negative_space.exif import content_extension, read_capture
 from negative_space.metadata import resolve_directory
-from negative_space.organise import PlanItem, plan_moves
+from negative_space.organise import UNSORTED, PlanItem, plan_moves
 from negative_space.pairing import pair_directory
 
 if TYPE_CHECKING:
@@ -170,7 +170,9 @@ def summarize(plan: LibraryPlan) -> PlanSummary:
         keepers=len(plan.placements),
         photos=sum(1 for placement in plan.placements if not placement.is_video),
         videos=sum(1 for placement in plan.placements if placement.is_video),
-        undated=sum(1 for placement in plan.placements if placement.metadata.taken_at is None),
+        undated=sum(
+            1 for placement in plan.placements if placement.destination.is_relative_to(UNSORTED)
+        ),
         by_source=dict(by_source),
         by_year=dict(sorted(by_year.items())),
         motion_count=len(plan.motion_drops),

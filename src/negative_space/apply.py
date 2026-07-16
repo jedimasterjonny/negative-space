@@ -102,6 +102,8 @@ def build_manifest(
                 "dst": dst,
                 "mtime": _epoch(taken),
                 "taken": taken.strftime("%Y:%m:%d %H:%M:%S"),
+                # Where to move it as-is if exiftool can't rewrite it (corrupt, etc.).
+                "unsorted": f"{output_root}/{UNSORTED.as_posix()}/{placement.source.name}",
             }
             metadata = placement.metadata
             if metadata.latitude is not None and metadata.longitude is not None:

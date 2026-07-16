@@ -82,6 +82,7 @@ def test_build_manifest_lowers_every_op_kind() -> None:
             "dst": "/volume1/library/2019/09 - September/2019-09-27 11-47-23.jpg",
             "mtime": 1_569_584_843,
             "taken": "2019:09:27 11:47:23",
+            "unsorted": "/volume1/library/unsorted/p.jpg",
             "lat": -33.9,
             "lng": 18.4,
         },

@@ -174,6 +174,11 @@ def _render_apply_result(outcome: ApplyOutcome) -> None:
     differs = counts.get("duplicate:differs", 0)
     if differs:
         console.print(f"[yellow]{differs:,} duplicate(s) were not byte-identical and were kept.[/]")
+    if total(":unsorted"):
+        console.print(
+            f"[yellow]{total(':unsorted'):,} photo(s) couldn't be rewritten "
+            f"(corrupt, etc.) and were moved to unsorted/ as-is.[/]"
+        )
     if total(":error"):
         console.print(
             f"[red]{total(':error'):,} operation(s) failed[/] — see the executor output above."

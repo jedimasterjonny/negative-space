@@ -138,18 +138,52 @@ def test_apply_manifest_skips_already_applied_photo(tmp_path: Path) -> None:
     assert out.read_bytes() == b"already here"
 
 
-def test_apply_manifest_records_photo_failures(tmp_path: Path) -> None:
-    # ``false`` fails the batch and every per-file retry, so all photos error.
-    (tmp_path / "a.jpg").write_bytes(b"a")
-    (tmp_path / "b.jpg").write_bytes(b"b")
-    out = tmp_path / "lib"
-    manifest = [_photo(str(tmp_path / n), str(out / n)) for n in ("a.jpg", "b.jpg")]
+def test_apply_manifest_moves_unrewritable_photos_to_unsorted(tmp_path: Path) -> None:
+    # ``false`` fails every rewrite; the photos are moved to unsorted/ as-is
+    # rather than lost. Two share a name -> the second gets a " (2)" suffix.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "IMG.jpg").write_bytes(b"one")
+    (tmp_path / "b" / "IMG.jpg").write_bytes(b"two")
+    uns = tmp_path / "lib" / "unsorted"
+    manifest = [
+        _photo(
+            str(tmp_path / "a" / "IMG.jpg"),
+            str(tmp_path / "lib" / "x.jpg"),
+            unsorted=str(uns / "IMG.jpg"),
+        ),
+        _photo(
+            str(tmp_path / "b" / "IMG.jpg"),
+            str(tmp_path / "lib" / "y.jpg"),
+            unsorted=str(uns / "IMG.jpg"),
+        ),
+    ]
 
     counts = apply_manifest(manifest, ["false"], str(tmp_path / "links"))
 
-    assert counts == {"photo:error": 2}
-    assert (tmp_path / "a.jpg").exists()  # a failed photo is left in place
-    assert not out.exists()
+    assert counts == {"photo:unsorted": 2}
+    assert (uns / "IMG.jpg").exists()
+    assert (uns / "IMG (2).jpg").exists()  # collision-renamed, not clobbered
+    assert not (tmp_path / "a" / "IMG.jpg").exists()  # moved, not left behind
+
+
+def test_apply_manifest_errors_when_the_unsorted_move_also_fails(tmp_path: Path) -> None:
+    # Rewrite fails and the unsorted destination is unreachable (its parent is a
+    # file, not a directory), so this is a genuine error and the file stays put.
+    (tmp_path / "IMG.jpg").write_bytes(b"x")
+    (tmp_path / "blocker").write_bytes(b"")  # a file where a directory is needed
+    manifest = [
+        _photo(
+            str(tmp_path / "IMG.jpg"),
+            str(tmp_path / "lib" / "x.jpg"),
+            unsorted=str(tmp_path / "blocker" / "sub" / "IMG.jpg"),
+        )
+    ]
+
+    counts = apply_manifest(manifest, ["false"], str(tmp_path / "links"))
+
+    assert counts == {"photo:error": 1}
+    assert (tmp_path / "IMG.jpg").exists()  # left in place when it can't be moved
 
 
 def test_apply_manifest_falls_back_to_per_file_on_batch_failure(tmp_path: Path) -> None:

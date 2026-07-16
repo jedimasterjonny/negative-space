@@ -136,21 +136,45 @@ def _rewrite_one(exiftool: list[str], op: dict, links_dir: str) -> None:
         _unlink_quietly(link)
 
 
+def _move_unsorted(src: str, dst: str) -> None:
+    # A rewrite-failed photo keeps its name in unsorted/; append " (N)" so a
+    # same-named casualty from another album is never clobbered.
+    destination = Path(dst)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    counter = 1
+    while destination.exists():
+        counter += 1
+        destination = Path(dst).with_name(f"{Path(dst).stem} ({counter}){Path(dst).suffix}")
+    Path(src).rename(destination)
+
+
+def _place_failed_photo(op: dict, counts: dict[str, int], reason: BaseException) -> None:
+    # exiftool couldn't rewrite it (corrupt, unsupported). Move it to unsorted/
+    # as-is rather than leave it behind; only a failed move is a real error.
+    try:
+        _move_unsorted(op["src"], op["unsorted"])
+    except OSError as move_error:
+        _tally(counts, "photo:error")
+        sys.stderr.write("ERROR photo {}: {}\n".format(op["src"], move_error))
+    else:
+        _tally(counts, "photo:unsorted")
+        sys.stderr.write("UNSORTED photo {} (rewrite failed): {}\n".format(op["src"], reason))
+
+
 def _flush_photos(exiftool: list[str], chunk: list, links_dir: str, counts: dict[str, int]) -> None:
     if _rewrite_batch(exiftool, chunk, links_dir):
         for op in chunk:
             move(op["src"], op["dst"], op["mtime"])
             _tally(counts, "photo:ok")
         return
-    # The batch reported a failure; re-run each file to find and skip the culprit.
+    # The batch reported a failure; re-run each file to find the culprit(s).
     for op in chunk:
         try:
             _rewrite_one(exiftool, op, links_dir)
-            move(op["src"], op["dst"], op["mtime"])
         except (OSError, subprocess.CalledProcessError) as exc:
-            _tally(counts, "photo:error")
-            sys.stderr.write("ERROR photo {}: {}\n".format(op["src"], exc))
+            _place_failed_photo(op, counts, exc)
         else:
+            move(op["src"], op["dst"], op["mtime"])
             _tally(counts, "photo:ok")
 
 
@@ -170,10 +194,12 @@ def _apply_drop_or_move(op: dict) -> str:
 
 
 def _already_done(op: dict) -> bool:
-    # Makes a re-run resumable: a move whose source is gone and destination is in
-    # place is finished; a delete whose source is gone is finished.
+    # Makes a re-run resumable. A photo's source only vanishes once it's been
+    # moved (to its dated path, or to unsorted/ on a rewrite failure), so a gone
+    # source means done; the same holds for a completed delete. A video/undated
+    # move must also land at its destination.
     src_gone = not Path(op["src"]).exists()
-    if op["kind"] in {"photo", "video", "undated"}:
+    if op["kind"] in {"video", "undated"}:
         return src_gone and Path(op["dst"]).exists()
     return src_gone
 

@@ -135,6 +135,7 @@ def test_organise_apply_runs_and_reports_results(
         "duplicate:ok": 25,
         "duplicate:differs": 2,
         "video:skip": 3,
+        "photo:unsorted": 2,
         "photo:error": 1,
     }
     captured: dict[str, object] = {}
@@ -162,6 +163,7 @@ def test_organise_apply_runs_and_reports_results(
     assert "Applied 132 operations" in output  # 80 + 27 + 25 ok
     assert "3 already done" in output  # skipped
     assert "not byte-identical" in output  # the 2 duplicates that differed
+    assert "moved to unsorted" in output  # the 2 unrewritable photos
     assert "failed" in output  # the 1 error
     assert "run.log" in output  # the log path is surfaced to the user
     # Applied into a sibling "-organised" library on the NAS.

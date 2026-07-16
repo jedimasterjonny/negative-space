@@ -29,6 +29,20 @@ if TYPE_CHECKING:
 _EXECUTOR = Path(__file__).with_name("_apply_executor.py")
 
 
+def _no_progress(_done: int, _total: int) -> None:
+    """Default progress sink: ignore updates."""
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyTarget:
+    """Where and how to apply on the NAS."""
+
+    mount: NfsMount
+    exiftool: str  # e.g. "perl /…/exiftool"
+    output_root: str  # NAS path the organised library is written under
+    work_dir: str  # NAS scratch dir for the executor, manifest and result
+
+
 @dataclass(frozen=True, slots=True)
 class ApplyOutcome:
     """The result of a destructive apply run."""
@@ -137,60 +151,75 @@ def run_executor(
     work_dir: str,
     exiftool: str,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> None:
-    """Run the executor on the NAS, letting its progress stream to the terminal.
-
-    Raises:
-        NasError: If the executor exits non-zero.
-    """
-    completed = runner(ssh_argv(host, _remote_command(work_dir, exiftool)))
-    if completed.returncode:
-        msg = f"apply executor failed on {host} (exit {completed.returncode})"
-        raise NasError(msg)
-
-
-def fetch_result(
-    host: str,
-    work_dir: str,
-    *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    log_path: Path,
+    on_progress: Callable[[int, int], None],
 ) -> dict[str, int]:
-    """Read the executor's ``result.json`` tallies back over SSH.
+    """Run the executor on the NAS, teeing its output to ``log_path`` as it goes.
+
+    Every line the executor emits is written to ``log_path`` (so a failed run
+    leaves a full record), progress lines drive ``on_progress``, and the final
+    ``RESULT`` line carries the tallies. The executor's stderr is folded in so
+    per-file errors and any crash land in the same log.
 
     Returns:
-        The ``"kind:outcome" -> count`` mapping the executor wrote.
+        The ``"kind:outcome" -> count`` tallies.
+
+    Raises:
+        NasError: If the executor exits non-zero (the message points at the log).
     """
-    completed = runner(
-        ssh_argv(host, "cat " + shlex.quote(work_dir + "/result.json")),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return json.loads(completed.stdout)
+    argv = ssh_argv(host, _remote_command(work_dir, exiftool))
+    counts: dict[str, int] = {}
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(  # noqa: S603 - argv is ssh with a quoted command
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        )
+        with process:
+            stream = process.stdout
+            if stream is None:  # pragma: no cover - stdout is always a pipe here
+                stream = []
+            for line in stream:
+                log.write(line)
+                text = line.strip()
+                if text.startswith("PROGRESS "):
+                    _, done, total = text.split()
+                    on_progress(int(done), int(total))
+                elif text.startswith("RESULT "):
+                    counts = json.loads(text[len("RESULT ") :])
+    if process.returncode:
+        msg = f"apply executor failed on {host} (exit {process.returncode}); see {log_path}"
+        raise NasError(msg)
+    return counts
 
 
 def run_apply(
-    plan: LibraryPlan, *, mount: NfsMount, exiftool: str, output_root: str, work_dir: str
+    plan: LibraryPlan,
+    target: ApplyTarget,
+    *,
+    log_path: Path,
+    on_progress: Callable[[int, int], None] = _no_progress,
 ) -> ApplyOutcome:
     """Apply ``plan`` on the NAS: build the manifest, ship it, run it, read results.
 
     Args:
         plan: The reorganisation to carry out.
-        mount: The NFS mount the takeout lives on.
-        exiftool: The exiftool command (e.g. ``"perl /…/exiftool"``).
-        output_root: NAS path the organised library is written under.
-        work_dir: NAS scratch dir for the executor and manifest.
+        target: Where and how to apply on the NAS.
+        log_path: Local file to tee the executor's progress and errors into.
+        on_progress: Called with ``(done, total)`` as the run advances.
 
     Returns:
         The plan and the executor's per-outcome counts.
     """
 
     def to_nas(path: Path) -> str:
-        return str(resolve_remote(path, mount).path)
+        return str(resolve_remote(path, target.mount).path)
 
-    manifest = build_manifest(plan, output_root=output_root, to_nas=to_nas)
-    ship(mount.host, work_dir, manifest)
-    run_executor(mount.host, work_dir, exiftool)
-    counts = fetch_result(mount.host, work_dir)
+    manifest = build_manifest(plan, output_root=target.output_root, to_nas=to_nas)
+    ship(target.mount.host, target.work_dir, manifest)
+    counts = run_executor(
+        target.mount.host,
+        target.work_dir,
+        target.exiftool,
+        log_path=log_path,
+        on_progress=on_progress,
+    )
     return ApplyOutcome(plan=plan, counts=counts)

@@ -4,15 +4,15 @@ import datetime
 import shutil
 import subprocess  # noqa: S404 - only constructs CompletedProcess, never runs a process
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Self, cast
 
 import pytest
 
 from negative_space import apply as apply_module
 from negative_space.apply import (
+    ApplyTarget,
     _remote_command,
     build_manifest,
-    fetch_result,
     run_apply,
     run_executor,
     ship,
@@ -179,24 +179,80 @@ def test_ship_creates_dir_then_uploads_executor_and_manifest(
     assert runner.calls[2][1]["input"] == '[{"kind": "motion", "src": "/x"}]'
 
 
-def test_run_executor_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+class _FakeProc:
+    """Stands in for a streaming subprocess.Popen: iterable stdout + returncode."""
+
+    def __init__(self, lines: list[str], returncode: int) -> None:
+        self.stdout = lines
+        self.returncode = returncode
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+
+def _fake_popen(lines: list[str], returncode: int = 0) -> object:
+    def factory(_argv: Sequence[str], **_kwargs: object) -> _FakeProc:
+        return _FakeProc(lines, returncode)
+
+    return factory
+
+
+def test_run_executor_tees_to_log_and_returns_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _use_ssh(monkeypatch)
-    run_executor("nas", "/vol/apply", "perl /x/exiftool", runner=_Runner(returncode=0))  # no raise
+    lines = [
+        "PROGRESS 2 4\n",
+        "ERROR photo /x/bad.HEIC: not a valid HEIC\n",
+        "PROGRESS 4 4\n",
+        'RESULT {"photo:ok": 3, "photo:error": 1}\n',
+    ]
+    monkeypatch.setattr(apply_module.subprocess, "Popen", _fake_popen(lines))
+    log = tmp_path / "apply.log"
+    ticks: list[tuple[int, int]] = []
 
-    with pytest.raises(NasError, match="exit 2"):
-        run_executor("nas", "/vol/apply", "perl /x/exiftool", runner=_Runner(returncode=2))
+    counts = run_executor(
+        "nas",
+        "/vol/apply",
+        "perl /x/exiftool",
+        log_path=log,
+        on_progress=lambda done, total: ticks.append((done, total)),
+    )
+
+    assert counts == {"photo:ok": 3, "photo:error": 1}
+    assert ticks == [(2, 4), (4, 4)]  # progress lines drove the callback
+    assert "not a valid HEIC" in log.read_text(encoding="utf-8")  # errors captured in the log
 
 
-def test_fetch_result_parses_the_json(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_executor_raises_and_keeps_the_log_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _use_ssh(monkeypatch)
-    runner = _Runner(stdout='{"photo:ok": 5, "motion:ok": 2}')
+    monkeypatch.setattr(apply_module.subprocess, "Popen", _fake_popen(["PROGRESS 1 2\n"], 2))
+    log = tmp_path / "apply.log"
 
-    assert fetch_result("nas", "/vol/apply", runner=runner) == {"photo:ok": 5, "motion:ok": 2}
+    with pytest.raises(NasError, match=f"exit 2.*{log}"):
+        run_executor(
+            "nas", "/vol/apply", "perl /x/exiftool", log_path=log, on_progress=lambda *_: None
+        )
+
+    assert "PROGRESS 1 2" in log.read_text(encoding="utf-8")  # partial log survives
 
 
-def test_run_apply_builds_ships_runs_and_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_apply_builds_ships_runs_and_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mount = NfsMount(
         host="nas", export=PurePosixPath("/volume1/export"), mount_point=Path("/nfs/export")
+    )
+    target = ApplyTarget(
+        mount=mount,
+        exiftool="perl /x/exiftool",
+        output_root="/volume1/lib",
+        work_dir="/volume1/apply",
     )
     plan = LibraryPlan(
         placements=(
@@ -212,21 +268,19 @@ def test_run_apply_builds_ships_runs_and_reads(monkeypatch: pytest.MonkeyPatch) 
         apply_module, "ship", lambda host, wd, manifest: seen.update(shipped=(host, wd, manifest))
     )
     monkeypatch.setattr(
-        apply_module, "run_executor", lambda host, wd, ex: seen.update(ran=(host, wd, ex))
+        apply_module,
+        "run_executor",
+        lambda host, wd, ex, **kw: (
+            seen.update(ran=(host, wd, ex), log=kw["log_path"]) or {"photo:ok": 1}
+        ),
     )
-    monkeypatch.setattr(apply_module, "fetch_result", lambda _host, _wd: {"photo:ok": 1})
 
-    outcome = run_apply(
-        plan,
-        mount=mount,
-        exiftool="perl /x/exiftool",
-        output_root="/volume1/lib",
-        work_dir="/volume1/apply",
-    )
+    outcome = run_apply(plan, target, log_path=tmp_path / "apply.log")
 
     assert outcome.plan is plan
     assert outcome.counts == {"photo:ok": 1}
     assert seen["ran"] == ("nas", "/volume1/apply", "perl /x/exiftool")
+    assert seen["log"] == tmp_path / "apply.log"
     host, work_dir, manifest = cast("tuple[str, str, list[dict[str, str]]]", seen["shipped"])
     assert (host, work_dir) == ("nas", "/volume1/apply")
     # the manifest was built with NAS-local paths under the output root

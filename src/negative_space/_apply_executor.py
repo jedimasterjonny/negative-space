@@ -151,7 +151,7 @@ def apply_manifest(
                 outcome = _apply_one(op, exiftool)
             except (OSError, subprocess.CalledProcessError) as exc:
                 outcome = "error"
-                sys.stderr.write(str(exc) + "\n")
+                sys.stderr.write("ERROR {} {}: {}\n".format(kind, op.get("src", "?"), exc))
         key = kind + ":" + outcome
         counts[key] = counts.get(key, 0) + 1
         if index % progress_every == 0 or index == total:
@@ -164,11 +164,11 @@ if __name__ == "__main__":  # pragma: no cover - the NAS entry point
     ops = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
 
     def _emit(done: int, total: int) -> None:
-        percent = done * 100 // total if total else 100
-        sys.stdout.write(f"  {done}/{total} ({percent}%)\n")
+        # Machine-readable for the orchestrator's progress bar and log.
+        sys.stdout.write(f"PROGRESS {done} {total}\n")
         sys.stdout.flush()
 
     result = apply_manifest(ops, exiftool_words, _emit)
-    # The orchestrator reads this back over SSH; stdout is only for live progress.
+    # A durable copy on the NAS as well as the RESULT line the orchestrator parses.
     Path(manifest_path).with_name("result.json").write_text(json.dumps(result), encoding="utf-8")
     sys.stdout.write("RESULT " + json.dumps(result) + "\n")

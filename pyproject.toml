@@ -138,6 +138,12 @@ possibly-missing-import = "error"
 possibly-unresolved-reference = "error"
 unsupported-dynamic-base = "error"
 
+# Google Takeout truncates ".supplemental-metadata" mid-word to fit a length
+# limit, so "supplemental-metada" is a genuine sidecar name, not a misspelling.
+# The trailing \b keeps the full word "supplemental-metadata" spell-checked.
+[tool.typos.default]
+extend-ignore-re = ['supplemental-metada\b']
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

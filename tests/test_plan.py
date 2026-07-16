@@ -135,3 +135,28 @@ def test_scan_uses_true_content_extension(tmp_path: Path) -> None:
 
     (keeper,) = keepers
     assert keeper.extension == ".jpg"  # sniffed from content, not the ".HEIC" name
+
+
+def test_scan_classifies_extensionless_and_mangled_media(tmp_path: Path) -> None:
+    album = tmp_path / "Album"
+    album.mkdir()
+    mp4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 8  # sniffs as .mp4
+    # A motion photo: still (kept) + its extensionless video (dropped).
+    (album / "IMG_1.jpg").write_bytes(b"\xff\xd8\xff" + b"\x00" * 20)
+    (album / "IMG_1.jpg.supplemental-metadata.json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "1408262445"}})
+    )
+    (album / "IMG_1").write_bytes(mp4)  # extensionless motion video
+    # A standalone Pixel clip with a Takeout-mangled extension, no still -> kept.
+    (album / "PXL_x.MP~2").write_bytes(mp4)
+
+    keepers, drops = scan(tmp_path)
+
+    names = {keeper.source.name for keeper in keepers}
+    assert "IMG_1.jpg" in names  # still kept
+    assert "PXL_x.MP~2" in names  # mangled standalone video kept
+    assert "IMG_1" not in names  # extensionless motion video not a keeper
+    assert [drop.source.name for drop in drops] == ["IMG_1"]  # dropped as motion
+    mangled = next(keeper for keeper in keepers if keeper.source.name == "PXL_x.MP~2")
+    assert mangled.is_video
+    assert mangled.extension == ".mp4"  # named by content, not the ".MP~2" mangle

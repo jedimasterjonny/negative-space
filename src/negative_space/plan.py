@@ -198,14 +198,15 @@ def _size(path: Path) -> int:
         return 0
 
 
-def _photo_extension(path: Path) -> str:
-    # Fall back to the (lower-cased) name only when the content is unrecognised.
+def _media_extension(path: Path) -> str:
+    # The true extension from content (JPEG-as-.HEIC, MP4-as-.MP~2, extensionless
+    # clips); fall back to the lower-cased name only when content is unrecognised.
     return content_extension(path) or path.suffix.lower()
 
 
 def _scan_dir(root_and_files: tuple[Path, list[str]]) -> tuple[list[Keeper], list[Drop]]:
     root, files = root_and_files
-    pairing = pair_directory(files)
+    pairing = pair_directory(files, content_ext=lambda name: content_extension(root / name))
     resolved = resolve_directory(
         pairing,
         load_sidecar=lambda name: _load_json(root / name),
@@ -216,8 +217,7 @@ def _scan_dir(root_and_files: tuple[Path, list[str]]) -> tuple[list[Keeper], lis
     for entry in pairing.keepers:
         resolved_entry = by_name[entry.name]
         path = root / entry.name
-        # Trust the video container's name; sniff photos, whose .HEIC is often JPEG.
-        extension = path.suffix.lower() if entry.is_video else _photo_extension(path)
+        extension = _media_extension(path)
         keeper = Keeper(
             path,
             entry.is_video,

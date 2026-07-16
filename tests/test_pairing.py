@@ -187,3 +187,36 @@ def test_pair_directory_resolves_numbered_duplicate_to_numbered_media() -> None:
     assert by_name["COLOR.jpg"].sidecar == "COLOR.jpg.supplemental-metadata.json"
     assert by_name["COLOR(1).jpg"].sidecar == "COLOR.jpg.supplemental-metadata(1).json"
     assert result.orphan_sidecars == ()
+
+
+def test_pair_directory_classifies_extensionless_and_mangled_by_content() -> None:
+    # Takeout leaves some media extensionless or with a mangled extension. A
+    # content sniffer classifies them: the extensionless clip beside its still is
+    # a motion video (droppable); the ".MP~2" clip with no still is a keeper.
+    names = ["IMG_1.HEIC", "IMG_1", "PXL_x.MP~2", "SCREENSHOT", "notes.txt"]
+    content = {"IMG_1": ".mov", "PXL_x.MP~2": ".mp4", "SCREENSHOT": ".jpg", "notes.txt": None}
+
+    result = pair_directory(names, content_ext=content.get)
+    by_name = {entry.name: entry for entry in result.entries}
+
+    assert by_name["IMG_1"].is_video  # extensionless clip sniffed as video
+    assert by_name["IMG_1"].is_motion_video  # paired with IMG_1.HEIC
+    assert by_name["PXL_x.MP~2"].is_video
+    assert not by_name["PXL_x.MP~2"].is_motion_video  # no still -> a keeper
+    assert not by_name["SCREENSHOT"].is_video  # extensionless JPEG sniffed as image
+    assert {e.name for e in result.motion_videos} == {"IMG_1"}
+    assert "notes.txt" in result.other  # unrecognised content -> not media
+
+
+def test_pair_directory_never_sniffs_sidecars() -> None:
+    # A content sniffer must not be called for .json sidecars (an extra file read
+    # per sidecar would be needless on a 100k-file library).
+    sniffed: list[str] = []
+
+    def content_ext(name: str) -> str | None:
+        sniffed.append(name)
+        return None
+
+    pair_directory(["a.jpg", "a.jpg.supplemental-metadata.json"], content_ext=content_ext)
+
+    assert sniffed == []  # neither the .jpg (known) nor the .json was sniffed

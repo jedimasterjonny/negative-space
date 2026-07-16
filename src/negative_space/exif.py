@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, BinaryIO, Final, SupportsFloat
 
 from PIL import Image, UnidentifiedImageError
 
-from negative_space.pairing import is_image, is_video
+from negative_space.pairing import IMAGE_EXTS, VIDEO_EXTS, is_image, is_video
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -40,6 +40,25 @@ _HEIF_BRANDS: Final = frozenset(
     }
 )
 _AVIF_BRANDS: Final = frozenset({b"avif", b"avis"})
+# ``ftyp`` brands for videos, so Takeout's extensionless / mangled (``.MP~2``)
+# clips are recognised by content. QuickTime is ``.mov``; the rest map to ``.mp4``.
+_QUICKTIME_BRANDS: Final = frozenset({b"qt  "})
+_MP4_BRANDS: Final = frozenset(
+    {
+        b"isom",
+        b"iso2",
+        b"iso4",
+        b"iso5",
+        b"iso6",
+        b"mp41",
+        b"mp42",
+        b"avc1",
+        b"dash",
+        b"M4V ",
+        b"MSNV",
+    }
+)
+_3GP_BRANDS: Final = frozenset({b"3gp4", b"3gp5", b"3gp6", b"3g2a"})
 _MAGIC_BYTES: Final = 12
 # Formats identified by a fixed leading signature (the ftyp-based ones are below).
 _SIGNATURES: Final = (
@@ -92,21 +111,28 @@ def read_capture(path: Path) -> Capture | None:
         return _read_image(path)
     if is_video(path.name):
         return _read_video(path)
+    # Unrecognised extension (missing, or Takeout-mangled like .MP~2): sniff.
+    sniffed = content_extension(path)
+    if sniffed in IMAGE_EXTS:
+        return _read_image(path)
+    if sniffed in VIDEO_EXTS:
+        return _read_video(path)
     return None
 
 
 def content_extension(path: Path) -> str | None:
     """Return the canonical extension for a file's real content, or ``None``.
 
-    Identifies the type from the leading magic bytes rather than trusting the
-    name, so a JPEG mislabelled ``.HEIC`` is named -- and rewritten -- as a JPEG.
+    Identifies the type -- image or video -- from the leading magic bytes rather
+    than trusting the name, so a JPEG mislabelled ``.HEIC`` becomes ``.jpg`` and
+    an extensionless or ``.MP~2``-mangled clip becomes ``.mp4``/``.mov``.
 
     Args:
         path: A file to sniff.
 
     Returns:
         A lower-case extension including the dot (e.g. ``".jpg"``), or ``None``
-        when the content is not a recognised image type.
+        when the content is not a recognised image or video type.
     """
     try:
         with path.open("rb") as stream:
@@ -119,11 +145,21 @@ def content_extension(path: Path) -> str | None:
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return ".webp"
     if head[4:8] == b"ftyp":
-        brand = head[8:12]
-        if brand in _AVIF_BRANDS:
-            return ".avif"
-        if brand in _HEIF_BRANDS:
-            return ".heic"
+        return _ftyp_extension(head[8:12])
+    return None
+
+
+def _ftyp_extension(brand: bytes) -> str | None:
+    if brand in _AVIF_BRANDS:
+        return ".avif"
+    if brand in _HEIF_BRANDS:
+        return ".heic"
+    if brand in _QUICKTIME_BRANDS:
+        return ".mov"
+    if brand in _3GP_BRANDS:
+        return ".3gp"
+    if brand in _MP4_BRANDS:
+        return ".mp4"
     return None
 
 

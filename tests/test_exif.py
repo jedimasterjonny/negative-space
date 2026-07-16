@@ -187,6 +187,24 @@ def test_read_capture_unknown_type(tmp_path: Path) -> None:
     assert read_capture(path) is None
 
 
+def test_read_capture_sniffs_extensionless_video(tmp_path: Path) -> None:
+    taken = datetime.datetime(2023, 8, 19, 11, 2, 58, tzinfo=datetime.UTC)
+    path = tmp_path / "MVIMG_20230819"  # no extension, MP4 content
+    path.write_bytes(_mp4(_seconds_since_1904(taken)))
+
+    assert read_capture(path) == Capture(taken_at=taken.replace(tzinfo=None))
+
+
+def test_read_capture_sniffs_extensionless_image(tmp_path: Path) -> None:
+    path = tmp_path / "IMG_noext"  # no extension, JPEG content
+    image = Image.new("RGB", (2, 2), (200, 50, 50))
+    exif = image.getexif()
+    exif[0x0132] = "2019:09:27 11:47:23"
+    image.save(path, format="JPEG", exif=exif)
+
+    assert read_capture(path) == Capture(taken_at=datetime.datetime(2019, 9, 27, 11, 47, 23))  # noqa: DTZ001
+
+
 # --- content_extension -----------------------------------------------------
 
 
@@ -202,7 +220,10 @@ def test_read_capture_unknown_type(tmp_path: Path) -> None:
         (b"\x00\x00\x00\x18ftypheic", ".heic"),
         (b"\x00\x00\x00\x18ftypmif1", ".heic"),
         (b"\x00\x00\x00\x18ftypavif", ".avif"),
-        (b"\x00\x00\x00\x18ftypisom", None),  # an MP4 container, not an image
+        (b"\x00\x00\x00\x18ftypisom", ".mp4"),  # an MP4 container
+        (b"\x00\x00\x00\x18ftypqt  ", ".mov"),  # QuickTime
+        (b"\x00\x00\x00\x18ftyp3gp4", ".3gp"),
+        (b"\x00\x00\x00\x18ftypXXXX", None),  # unrecognised ftyp brand
         (b"not an image", None),
     ],
 )

@@ -25,11 +25,11 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
 #: Still-image extensions (lower-case, with leading dot).
 IMAGE_EXTS: Final = frozenset(
-    {".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"},
+    {".jpg", ".jpeg", ".heic", ".heif", ".avif", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff"},
 )
 #: Video extensions, including Pixel motion-photo ``.mp``.
 VIDEO_EXTS: Final = frozenset(
@@ -72,6 +72,25 @@ def is_image(name: str) -> bool:
 def is_video(name: str) -> bool:
     """Return whether ``name`` has a video extension."""
     return extension(name) in VIDEO_EXTS
+
+
+def _kind(name: str, content_ext: Callable[[str], str | None] | None) -> str | None:
+    # Classify by extension, falling back to a content sniff for files Takeout
+    # left extensionless or with a mangled extension (e.g. ``.MP~2``). Sidecars
+    # and other ``.json`` are never sniffed.
+    if is_image(name):
+        return "image"
+    if is_video(name):
+        return "video"
+    # No sniffer, or a sidecar we won't spend a read on.
+    if content_ext is None or extension(name) == ".json":
+        return None
+    sniffed = content_ext(name)
+    if sniffed in IMAGE_EXTS:
+        return "image"
+    if sniffed in VIDEO_EXTS:
+        return "video"
+    return None
 
 
 def _truncate_sidecar(stem: str) -> str:
@@ -187,26 +206,33 @@ class DirectoryPairing:
         return tuple(entry for entry in self.entries if not entry.is_motion_video)
 
 
-def pair_directory(names: Iterable[str]) -> DirectoryPairing:
+def pair_directory(
+    names: Iterable[str], *, content_ext: Callable[[str], str | None] | None = None
+) -> DirectoryPairing:
     """Pair one directory's files into media, sidecars and motion videos.
 
     Args:
         names: File names in a single album/year folder.
+        content_ext: Optional ``name -> true extension`` sniffer used to classify
+            files whose own extension is missing or unrecognised (Takeout leaves
+            some media extensionless or mangled, e.g. ``.MP~2``).
 
     Returns:
         The structured pairing for that folder.
     """
     names = list(names)
     name_set = set(names)
-    images = [name for name in names if is_image(name)]
-    videos = [name for name in names if is_video(name)]
+    kinds = {name: _kind(name, content_ext) for name in names}  # sniff each file at most once
+    images = [name for name in names if kinds[name] == "image"]
+    videos = [name for name in names if kinds[name] == "video"]
+    video_set = set(videos)
     image_stems = {_stem(image).lower(): image for image in images}
     media_set = {*images, *videos}
 
     claimed: set[str] = set()
     entries: list[MediaEntry] = []
     for name in (*images, *videos):
-        video = is_video(name)
+        video = name in video_set
         sidecar = next(
             (cand for cand in expected_sidecars(name) if cand in name_set and cand not in claimed),
             None,

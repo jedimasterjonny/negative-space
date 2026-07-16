@@ -89,6 +89,51 @@ def test_rewrite_moves_to_destination_before_running_exiftool(
     assert not src.exists()
 
 
+def test_apply_manifest_skips_already_applied_moves(tmp_path: Path) -> None:
+    # A move whose source is gone and destination is in place is already done.
+    out = tmp_path / "library" / "x.jpg"
+    out.parent.mkdir(parents=True)
+    out.write_bytes(b"already here")
+    gone = str(tmp_path / "gone.jpg")
+    manifest = [{"kind": "photo", "src": gone, "dst": str(out), "mtime": 1, "taken": "x"}]
+
+    counts = apply_manifest(manifest, _FAKE_EXIFTOOL)
+
+    assert counts == {"photo:skip": 1}
+    assert out.read_bytes() == b"already here"  # untouched
+
+
+def test_apply_manifest_records_exiftool_failure(tmp_path: Path) -> None:
+    # ``false`` exits non-zero, standing in for an exiftool that refuses the file.
+    (tmp_path / "bad.jpg").write_bytes(b"\xff\xd8\xff")
+    manifest = [
+        {
+            "kind": "photo",
+            "src": str(tmp_path / "bad.jpg"),
+            "dst": str(tmp_path / "out" / "bad.jpg"),
+            "mtime": 1,
+            "taken": "2019:09:27 11:47:23",
+        },
+    ]
+
+    counts = apply_manifest(manifest, ["false"])
+
+    assert counts == {"photo:error": 1}
+
+
+def test_apply_manifest_reports_progress(tmp_path: Path) -> None:
+    (tmp_path / "a.mp4").write_bytes(b"a")
+    (tmp_path / "b.mp4").write_bytes(b"b")
+    (tmp_path / "c.mp4").write_bytes(b"c")
+    manifest = [{"kind": "motion", "src": str(tmp_path / n)} for n in ("a.mp4", "b.mp4", "c.mp4")]
+    seen: list[tuple[int, int]] = []
+
+    apply_manifest(manifest, _FAKE_EXIFTOOL, lambda done, total: seen.append((done, total)), 2)
+
+    # A tick every 2 ops, and always one at the end.
+    assert seen == [(2, 3), (3, 3)]
+
+
 def test_apply_manifest_handles_every_kind(tmp_path: Path) -> None:
     # One file of each kind, plus a duplicate whose bytes DON'T match its keeper.
     (tmp_path / "photo.jpg").write_bytes(b"photo")
@@ -130,7 +175,7 @@ def test_apply_manifest_handles_every_kind(tmp_path: Path) -> None:
             "src": str(tmp_path / "not-really-dup.jpg"),
             "kept": str(tmp_path / "kept2.jpg"),
         },
-        {"kind": "motion", "src": str(tmp_path / "already-gone.mp4")},  # error: missing file
+        {"kind": "motion", "src": str(tmp_path / "already-gone.mp4")},  # skip: already deleted
         {"kind": "mystery", "src": str(tmp_path / "mystery.bin")},  # unrecognised: no-op
     ]
 
@@ -143,7 +188,7 @@ def test_apply_manifest_handles_every_kind(tmp_path: Path) -> None:
         "motion:ok": 1,
         "duplicate:ok": 1,
         "duplicate:differs": 1,
-        "motion:error": 1,
+        "motion:skip": 1,
         "mystery:ok": 1,
     }
     # An unrecognised op touches nothing.

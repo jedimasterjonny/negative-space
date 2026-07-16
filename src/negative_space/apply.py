@@ -179,6 +179,7 @@ def run_executor(
                 stream = []
             for line in stream:
                 log.write(line)
+                log.flush()  # keep the log usable live and intact if the run dies
                 text = line.strip()
                 if text.startswith("PROGRESS "):
                     _, done, total = text.split()

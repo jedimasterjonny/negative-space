@@ -13,14 +13,16 @@ from typing import TYPE_CHECKING, Annotated
 import typer
 from rich.table import Table
 
+from negative_space.apply import run_apply
 from negative_space.console import configure_logging, console, logger
 from negative_space.extract import ExtractOptions
 from negative_space.extract import run as run_extraction
-from negative_space.nas import NasError, check_ssh, find_mount_for, read_mounts
+from negative_space.nas import NasError, check_ssh, find_mount_for, read_mounts, resolve_remote
 from negative_space.plan import build_plan, scan, summarize
 from negative_space.remote import ensure_exiftool
 
 if TYPE_CHECKING:
+    from negative_space.apply import ApplyOutcome
     from negative_space.plan import LibraryPlan, PlanSummary
 
 app = typer.Typer(
@@ -157,24 +159,62 @@ def _render_report(summary: PlanSummary, plan: LibraryPlan) -> None:
     console.print("[bold]Sample of the planned layout:[/]")
     for placement in sorted(plan.placements, key=lambda item: str(item.destination))[:15]:
         console.print(f"  {placement.destination}")
-    console.print("\n[dim]Dry run — nothing was changed.[/]")
+
+
+def _render_apply_result(outcome: ApplyOutcome) -> None:
+    counts = outcome.counts
+
+    def total(suffix: str) -> int:
+        return sum(value for key, value in counts.items() if key.endswith(suffix))
+
+    console.print(f"\n[bold green]Applied {total(':ok'):,} operations[/] on the NAS.")
+    if total(":skip"):
+        console.print(f"[dim]{total(':skip'):,} already done — skipped on this resumed run.[/]")
+    differs = counts.get("duplicate:differs", 0)
+    if differs:
+        console.print(f"[yellow]{differs:,} duplicate(s) were not byte-identical and were kept.[/]")
+    if total(":error"):
+        console.print(
+            f"[red]{total(':error'):,} operation(s) failed[/] — see the executor output above."
+        )
+
+    table = Table(title="apply results", title_justify="left", show_edge=False)
+    table.add_column("operation")
+    table.add_column("count", justify="right")
+    for key, count in sorted(counts.items()):
+        table.add_row(key, f"{count:,}")
+    console.print(table)
+
+
+ApplyOption = Annotated[
+    bool,
+    typer.Option("--apply", help="Carry out the reorganisation on the NAS (default: dry run)."),
+]
+
+YesOption = Annotated[
+    bool,
+    typer.Option("--yes", "-y", help="Skip the confirmation prompt before applying."),
+]
 
 
 @app.command(
     help=(
-        "Plan the reorganisation of the takeout in TARGET. This is a dry run: it "
-        "reports what would move where, which motion-photo videos would be dropped, "
-        "and where each file's date/GPS comes from, without changing anything."
+        "Plan the reorganisation of the takeout in TARGET. By default this is a dry "
+        "run: it reports what would move where, which motion-photo videos and "
+        "duplicates would be dropped, and where each file's date/GPS comes from, "
+        "without changing anything. Pass --apply to carry it out on the NAS."
     ),
 )
 def organise(
     target: TargetArgument,
     *,
     jobs: ScanJobsOption = 16,
+    apply_changes: ApplyOption = False,
+    yes: YesOption = False,
     verbose: VerboseOption = False,
 ) -> None:
     configure_logging(verbose=verbose)
-    console.rule("[bold]negative-space · organise (dry run)")
+    console.rule(f"[bold]negative-space · organise ({'apply' if apply_changes else 'dry run'})")
     try:
         mount = find_mount_for(target, read_mounts())
         check_ssh(mount.host)
@@ -188,3 +228,28 @@ def organise(
     keepers, drops = scan(target, jobs=jobs)
     plan = build_plan(keepers, drops)
     _render_report(summarize(plan), plan)
+
+    if not apply_changes:
+        console.print(
+            "\n[dim]Dry run — nothing was changed. Re-run with --apply to carry it out.[/]"
+        )
+        return
+
+    output_root = f"{resolve_remote(target, mount).path}-organised"
+    work_dir = str(mount.export / ".negative-space" / "apply")
+    console.print(
+        f"\n[bold red]This rewrites, moves and deletes files on {mount.host}[/] — "
+        f"organising into [bold]{output_root}[/]. This cannot be undone."
+    )
+    if not yes:
+        typer.confirm("Proceed?", abort=True)
+
+    logger.info("Applying on %s — progress streams below…", mount.host)
+    try:
+        outcome = run_apply(
+            plan, mount=mount, exiftool=exiftool, output_root=output_root, work_dir=work_dir
+        )
+    except NasError as error:
+        logger.error("%s", error)
+        raise typer.Exit(code=1) from error
+    _render_apply_result(outcome)

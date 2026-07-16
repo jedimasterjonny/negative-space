@@ -23,7 +23,8 @@ _SEPT = PurePosixPath("2019", "09 - September")
 def _keeper(
     name: str, *, video: bool, when: datetime.datetime | None, tag: MetadataSource, size: int = 0
 ) -> Keeper:
-    return Keeper(Path("/t") / name, video, size, PhotoMetadata(taken_at=when), tag)
+    extension = Path(name).suffix
+    return Keeper(Path("/t") / name, video, size, extension, PhotoMetadata(taken_at=when), tag)
 
 
 def _plan():
@@ -119,3 +120,18 @@ def test_scan_resolves_and_drops_motion(tmp_path: Path) -> None:
     resolved = next(keeper for keeper in keepers if keeper.source.name == "a.jpg")
     assert resolved.source_tag is MetadataSource.SIDECAR
     assert resolved.metadata.taken_at == datetime.datetime(2014, 8, 17, 8, 0, 45)  # noqa: DTZ001
+
+
+def test_scan_uses_true_content_extension(tmp_path: Path) -> None:
+    album = tmp_path / "Album"
+    album.mkdir()
+    # A JPEG mislabelled ".HEIC" -- the common Google Takeout case.
+    (album / "IMG.HEIC").write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 20)
+    (album / "IMG.HEIC.supplemental-metadata.json").write_text(
+        json.dumps({"photoTakenTime": {"timestamp": "1408262445"}})
+    )
+
+    keepers, _drops = scan(tmp_path)
+
+    (keeper,) = keepers
+    assert keeper.extension == ".jpg"  # sniffed from content, not the ".HEIC" name

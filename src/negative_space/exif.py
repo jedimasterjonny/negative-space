@@ -21,6 +21,36 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+# HEIF/AVIF brands that follow the ``ftyp`` box at bytes 4:8. Google Takeout
+# stores many iPhone photos as JPEG bytes under a ``.HEIC`` name, so the true
+# content -- not the extension -- must drive the output name and the rewrite.
+_HEIF_BRANDS: Final = frozenset(
+    {
+        b"heic",
+        b"heix",
+        b"heim",
+        b"heis",
+        b"hevc",
+        b"hevx",
+        b"hevm",
+        b"hevs",
+        b"mif1",
+        b"msf1",
+        b"mif2",
+    }
+)
+_AVIF_BRANDS: Final = frozenset({b"avif", b"avis"})
+_MAGIC_BYTES: Final = 12
+# Formats identified by a fixed leading signature (the ftyp-based ones are below).
+_SIGNATURES: Final = (
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"GIF87a", ".gif"),
+    (b"GIF89a", ".gif"),
+    (b"II*\x00", ".tiff"),
+    (b"MM\x00*", ".tiff"),
+)
+
 _EXIF_IFD: Final = 0x8769
 _GPS_IFD: Final = 0x8825
 # GPS sub-IFD tags: latitude/longitude as (deg, min, sec) plus an N/S/E/W ref.
@@ -61,6 +91,38 @@ def read_capture(path: Path) -> Capture | None:
         return _read_image(path)
     if is_video(path.name):
         return _read_video(path)
+    return None
+
+
+def content_extension(path: Path) -> str | None:
+    """Return the canonical extension for a file's real content, or ``None``.
+
+    Identifies the type from the leading magic bytes rather than trusting the
+    name, so a JPEG mislabelled ``.HEIC`` is named -- and rewritten -- as a JPEG.
+
+    Args:
+        path: A file to sniff.
+
+    Returns:
+        A lower-case extension including the dot (e.g. ``".jpg"``), or ``None``
+        when the content is not a recognised image type.
+    """
+    try:
+        with path.open("rb") as stream:
+            head = stream.read(_MAGIC_BYTES)
+    except OSError:
+        return None
+    for signature, extension in _SIGNATURES:
+        if head.startswith(signature):
+            return extension
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return ".webp"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in _AVIF_BRANDS:
+            return ".avif"
+        if brand in _HEIF_BRANDS:
+            return ".heic"
     return None
 
 

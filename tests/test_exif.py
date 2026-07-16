@@ -16,6 +16,7 @@ from negative_space.exif import (
     _parse_gps,
     _select_datetime,
     _to_decimal,
+    content_extension,
     read_capture,
 )
 
@@ -184,3 +185,34 @@ def test_read_capture_unknown_type(tmp_path: Path) -> None:
     path.write_text("hello")
 
     assert read_capture(path) is None
+
+
+# --- content_extension -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("head", "expected"),
+    [
+        (b"\xff\xd8\xff\xe0" + b"\x00" * 8, ".jpg"),
+        (b"\x89PNG\r\n\x1a\n" + b"\x00" * 4, ".png"),
+        (b"GIF89a" + b"\x00" * 6, ".gif"),
+        (b"RIFF\x00\x00\x00\x00WEBP", ".webp"),
+        (b"II*\x00" + b"\x00" * 8, ".tiff"),
+        (b"\x00\x00\x00\x18ftypheic", ".heic"),
+        (b"\x00\x00\x00\x18ftypmif1", ".heic"),
+        (b"\x00\x00\x00\x18ftypavif", ".avif"),
+        (b"\x00\x00\x00\x18ftypisom", None),  # an MP4 container, not an image
+        (b"not an image", None),
+    ],
+)
+def test_content_extension_sniffs_magic_bytes(
+    tmp_path: Path, head: bytes, expected: str | None
+) -> None:
+    path = tmp_path / "file.bin"
+    path.write_bytes(head)
+
+    assert content_extension(path) == expected
+
+
+def test_content_extension_missing_file(tmp_path: Path) -> None:
+    assert content_extension(tmp_path / "gone.bin") is None

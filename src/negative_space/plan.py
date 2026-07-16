@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from negative_space.exif import read_capture
+from negative_space.exif import content_extension, read_capture
 from negative_space.metadata import resolve_directory
 from negative_space.organise import PlanItem, plan_moves
 from negative_space.pairing import pair_directory
@@ -30,11 +30,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class Keeper:
-    """A media file to keep, with its resolved metadata and size."""
+    """A media file to keep, with its resolved metadata, size and true extension."""
 
     source: Path
     is_video: bool
     size: int
+    extension: str  # from content, not the (sometimes wrong) name, e.g. ".jpg"
     metadata: PhotoMetadata
     source_tag: MetadataSource
 
@@ -127,7 +128,7 @@ def build_plan(keepers: Iterable[Keeper], motion: Iterable[Drop]) -> LibraryPlan
         PlanItem(
             key=str(keeper.source),
             taken_at=keeper.metadata.taken_at,
-            extension=keeper.source.suffix,
+            extension=keeper.extension,
             fallback_name=keeper.source.name,
         )
         for keeper in unique
@@ -195,6 +196,11 @@ def _size(path: Path) -> int:
         return 0
 
 
+def _photo_extension(path: Path) -> str:
+    # Fall back to the (lower-cased) name only when the content is unrecognised.
+    return content_extension(path) or path.suffix.lower()
+
+
 def _scan_dir(root_and_files: tuple[Path, list[str]]) -> tuple[list[Keeper], list[Drop]]:
     root, files = root_and_files
     pairing = pair_directory(files)
@@ -208,8 +214,15 @@ def _scan_dir(root_and_files: tuple[Path, list[str]]) -> tuple[list[Keeper], lis
     for entry in pairing.keepers:
         resolved_entry = by_name[entry.name]
         path = root / entry.name
+        # Trust the video container's name; sniff photos, whose .HEIC is often JPEG.
+        extension = path.suffix.lower() if entry.is_video else _photo_extension(path)
         keeper = Keeper(
-            path, entry.is_video, _size(path), resolved_entry.metadata, resolved_entry.source
+            path,
+            entry.is_video,
+            _size(path),
+            extension,
+            resolved_entry.metadata,
+            resolved_entry.source,
         )
         keepers.append(keeper)
     drops = [Drop(root / entry.name, _size(root / entry.name)) for entry in pairing.motion_videos]

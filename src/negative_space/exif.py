@@ -59,7 +59,10 @@ _MP4_BRANDS: Final = frozenset(
     }
 )
 _3GP_BRANDS: Final = frozenset({b"3gp4", b"3gp5", b"3gp6", b"3g2a"})
-_MAGIC_BYTES: Final = 12
+# Read past the ftyp major brand + minor version to the compatible-brand list, so
+# a clip with an exotic major brand (e.g. "FACE") is still recognised by "isom".
+_MAGIC_BYTES: Final = 64
+_FTYP_BRANDS_OFFSET: Final = 16  # size(4) + "ftyp"(4) + major(4) + minor(4)
 # Formats identified by a fixed leading signature (the ftyp-based ones are below).
 _SIGNATURES: Final = (
     (b"\xff\xd8\xff", ".jpg"),
@@ -145,21 +148,26 @@ def content_extension(path: Path) -> str | None:
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
         return ".webp"
     if head[4:8] == b"ftyp":
-        return _ftyp_extension(head[8:12])
+        return _ftyp_extension(head)
     return None
 
 
-def _ftyp_extension(brand: bytes) -> str | None:
-    if brand in _AVIF_BRANDS:
-        return ".avif"
-    if brand in _HEIF_BRANDS:
-        return ".heic"
-    if brand in _QUICKTIME_BRANDS:
-        return ".mov"
-    if brand in _3GP_BRANDS:
-        return ".3gp"
-    if brand in _MP4_BRANDS:
-        return ".mp4"
+def _ftyp_extension(head: bytes) -> str | None:
+    # Try the major brand first, then each compatible brand, so an exotic major
+    # brand doesn't hide an otherwise-standard MP4/MOV/HEIF.
+    brands = [head[8:12]]
+    brands += [head[i : i + 4] for i in range(_FTYP_BRANDS_OFFSET, len(head), 4)]
+    for brand in brands:
+        if brand in _AVIF_BRANDS:
+            return ".avif"
+        if brand in _HEIF_BRANDS:
+            return ".heic"
+        if brand in _QUICKTIME_BRANDS:
+            return ".mov"
+        if brand in _3GP_BRANDS:
+            return ".3gp"
+        if brand in _MP4_BRANDS:
+            return ".mp4"
     return None
 
 

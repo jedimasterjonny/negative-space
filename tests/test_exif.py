@@ -223,7 +223,9 @@ def test_read_capture_sniffs_extensionless_image(tmp_path: Path) -> None:
         (b"\x00\x00\x00\x18ftypisom", ".mp4"),  # an MP4 container
         (b"\x00\x00\x00\x18ftypqt  ", ".mov"),  # QuickTime
         (b"\x00\x00\x00\x18ftyp3gp4", ".3gp"),
-        (b"\x00\x00\x00\x18ftypXXXX", None),  # unrecognised ftyp brand
+        # exotic major brand ("FACE") rescued by a compatible brand ("isom")
+        (b"\x00\x00\x00\x18ftypFACE\x00\x00\x00\x00isomavc1", ".mp4"),
+        (b"\x00\x00\x00\x18ftypXXXX", None),  # unrecognised, no compatible brands
         (b"not an image", None),
     ],
 )

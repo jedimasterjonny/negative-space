@@ -17,8 +17,11 @@ from negative_space.nas import NasError, NfsMount
 from negative_space.plan import Drop, Keeper
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import pytest
 
+    from negative_space.apply import ApplyTarget
     from negative_space.plan import LibraryPlan
 
 runner = CliRunner()
@@ -136,13 +139,23 @@ def test_organise_apply_runs_and_reports_results(
     }
     captured: dict[str, object] = {}
 
-    def fake_apply(plan: object, **kwargs: object) -> ApplyOutcome:
-        captured.update(kwargs)
+    def fake_apply(
+        plan: object,
+        target: object,
+        *,
+        log_path: object,
+        on_progress: Callable[[int, int], None],
+    ) -> ApplyOutcome:
+        captured["target"] = target
+        captured["log_path"] = log_path
+        on_progress(7, 21)  # exercise the live progress bar
         return ApplyOutcome(plan=cast("LibraryPlan", plan), counts=counts)
 
     monkeypatch.setattr("negative_space.cli.run_apply", fake_apply)
 
-    result = runner.invoke(app, ["organise", "--apply", "--yes", str(tmp_path)])
+    result = runner.invoke(
+        app, ["organise", "--apply", "--yes", "--log", str(tmp_path / "run.log"), str(tmp_path)]
+    )
 
     assert result.exit_code == 0
     output = _flatten(result.stdout)
@@ -150,9 +163,11 @@ def test_organise_apply_runs_and_reports_results(
     assert "3 already done" in output  # skipped
     assert "not byte-identical" in output  # the 2 duplicates that differed
     assert "failed" in output  # the 1 error
+    assert "run.log" in output  # the log path is surfaced to the user
     # Applied into a sibling "-organised" library on the NAS.
-    assert captured["output_root"] == "/volume1/scriptorum-organised"
-    assert captured["work_dir"] == "/volume1/scriptorum/.negative-space/apply"
+    target = cast("ApplyTarget", captured["target"])
+    assert target.output_root == "/volume1/scriptorum-organised"
+    assert target.work_dir == "/volume1/scriptorum/.negative-space/apply"
 
 
 def test_organise_apply_clean_run_reports_only_the_total(
@@ -160,7 +175,7 @@ def test_organise_apply_clean_run_reports_only_the_total(
 ) -> None:
     _setup_nas(tmp_path, monkeypatch)
 
-    def fake_apply(plan: object, **_kwargs: object) -> ApplyOutcome:
+    def fake_apply(plan: object, _target: object, **_kwargs: object) -> ApplyOutcome:
         return ApplyOutcome(plan=cast("LibraryPlan", plan), counts={"photo:ok": 100})
 
     monkeypatch.setattr("negative_space.cli.run_apply", fake_apply)
@@ -182,7 +197,7 @@ def test_organise_apply_aborts_without_confirmation(
     _setup_nas(tmp_path, monkeypatch)
     called = False
 
-    def fake_apply(_plan: object, **_kwargs: object) -> ApplyOutcome:
+    def fake_apply(_plan: object, _target: object, **_kwargs: object) -> ApplyOutcome:
         nonlocal called
         called = True
         raise AssertionError  # must not run when the user declines
@@ -198,7 +213,7 @@ def test_organise_apply_aborts_without_confirmation(
 def test_organise_apply_reports_nas_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _setup_nas(tmp_path, monkeypatch)
 
-    def boom(_plan: object, **_kwargs: object) -> ApplyOutcome:
+    def boom(_plan: object, _target: object, **_kwargs: object) -> ApplyOutcome:
         message = "apply executor failed on nas (exit 1)"
         raise NasError(message)
 

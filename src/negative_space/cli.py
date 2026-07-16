@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from negative_space.apply import run_apply
+from negative_space.apply import ApplyTarget, run_apply
 from negative_space.console import configure_logging, console, logger
 from negative_space.extract import ExtractOptions
 from negative_space.extract import run as run_extraction
@@ -196,6 +197,35 @@ YesOption = Annotated[
     typer.Option("--yes", "-y", help="Skip the confirmation prompt before applying."),
 ]
 
+LogOption = Annotated[
+    Path,
+    typer.Option(
+        "--log",
+        help="Where to write the apply progress log (for diagnosing a failed run).",
+        show_default=False,
+        dir_okay=False,
+        writable=True,
+    ),
+]
+
+
+def _run_apply_with_progress(
+    plan: LibraryPlan, target: ApplyTarget, log_path: Path
+) -> ApplyOutcome:
+    columns = (
+        TextColumn("[cyan]Applying[/]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    )
+    with Progress(*columns, console=console) as progress:
+        task = progress.add_task("apply", total=None)
+
+        def advance(done: int, total: int) -> None:
+            progress.update(task, completed=done, total=total)
+
+        return run_apply(plan, target, log_path=log_path, on_progress=advance)
+
 
 @app.command(
     help=(
@@ -205,12 +235,13 @@ YesOption = Annotated[
         "without changing anything. Pass --apply to carry it out on the NAS."
     ),
 )
-def organise(
+def organise(  # noqa: PLR0913 - each parameter is a distinct user-facing CLI option
     target: TargetArgument,
     *,
     jobs: ScanJobsOption = 16,
     apply_changes: ApplyOption = False,
     yes: YesOption = False,
+    log: LogOption = Path("organise-apply.log"),
     verbose: VerboseOption = False,
 ) -> None:
     configure_logging(verbose=verbose)
@@ -235,21 +266,26 @@ def organise(
         )
         return
 
-    output_root = f"{resolve_remote(target, mount).path}-organised"
-    work_dir = str(mount.export / ".negative-space" / "apply")
+    target_config = ApplyTarget(
+        mount=mount,
+        exiftool=exiftool,
+        output_root=f"{resolve_remote(target, mount).path}-organised",
+        work_dir=str(mount.export / ".negative-space" / "apply"),
+    )
     console.print(
         f"\n[bold red]This rewrites, moves and deletes files on {mount.host}[/] — "
-        f"organising into [bold]{output_root}[/]. This cannot be undone."
+        f"organising into [bold]{target_config.output_root}[/]. This cannot be undone."
     )
     if not yes:
         typer.confirm("Proceed?", abort=True)
 
-    logger.info("Applying on %s — progress streams below…", mount.host)
+    log_path = log.resolve()
+    console.print(f"[dim]Progress is logged to {log_path}[/]")
     try:
-        outcome = run_apply(
-            plan, mount=mount, exiftool=exiftool, output_root=output_root, work_dir=work_dir
-        )
+        outcome = _run_apply_with_progress(plan, target_config, log_path)
     except NasError as error:
         logger.error("%s", error)
+        console.print(f"[yellow]Share the log at {log_path} to diagnose the failure.[/]")
         raise typer.Exit(code=1) from error
     _render_apply_result(outcome)
+    console.print(f"[dim]Full log: {log_path}[/]")

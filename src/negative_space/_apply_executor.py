@@ -72,14 +72,26 @@ def move(src: str, dst: str, mtime: float | None) -> None:
         os.utime(destination, (mtime, mtime))
 
 
+def rewrite(exiftool: list[str], op: dict) -> None:
+    """Move a photo to its dated path, rewrite its metadata, then set its mtime.
+
+    The move happens first so exiftool operates on the destination, whose
+    extension reflects the true content (a JPEG mislabelled ``.HEIC`` becomes a
+    ``.jpg`` exiftool will actually write). The mtime is set last because the
+    rewrite touches it.
+    """
+    move(op["src"], op["dst"], None)
+    argv = photo_argv(exiftool, op["taken"], op.get("lat"), op.get("lng"), op["dst"])
+    subprocess.run(  # noqa: S603 - argv built here, no shell
+        argv, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    os.utime(op["dst"], (op["mtime"], op["mtime"]))
+
+
 def _apply_one(op: dict, exiftool: list[str]) -> str:
     kind = op["kind"]
     if kind == "photo":
-        argv = photo_argv(exiftool, op["taken"], op.get("lat"), op.get("lng"), op["src"])
-        subprocess.run(  # noqa: S603 - argv built here, no shell
-            argv, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        move(op["src"], op["dst"], op["mtime"])
+        rewrite(exiftool, op)
     elif kind == "video":
         move(op["src"], op["dst"], op["mtime"])
     elif kind == "undated":

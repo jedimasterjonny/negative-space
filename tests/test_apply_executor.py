@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from negative_space._apply_executor import apply_manifest, digest, move, photo_argv
+from negative_space import _apply_executor
+from negative_space._apply_executor import apply_manifest, digest, move, photo_argv, rewrite
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 # ``true`` ignores its arguments and exits 0 — a stand-in for exiftool so the
 # executor's move/mtime logic can be exercised without a real exiftool present.
@@ -51,6 +54,39 @@ def test_move_creates_parents_and_sets_mtime(tmp_path: Path) -> None:
     assert not src.exists()
     assert dst.read_bytes() == b"x"
     assert round(dst.stat().st_mtime) == 1_569_584_843
+
+
+def test_rewrite_moves_to_destination_before_running_exiftool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A JPEG mislabelled ".HEIC": exiftool must see the ".jpg" destination, not
+    # the ".HEIC" source, so the move has to happen first.
+    src = tmp_path / "IMG.HEIC"
+    src.write_bytes(b"\xff\xd8\xffjpeg")
+    dst = tmp_path / "out" / "2022" / "shot.jpg"
+    seen: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **_kwargs: object) -> None:
+        seen["last_arg"] = argv[-1]
+        seen["dst_exists_when_called"] = dst.exists()
+
+    monkeypatch.setattr(_apply_executor.subprocess, "run", fake_run)
+
+    rewrite(
+        ["exiftool"],
+        {
+            "src": str(src),
+            "dst": str(dst),
+            "taken": "2022:08:06 07:40:32",
+            "mtime": 1_659_771_632,
+            "lat": 52.2,
+            "lng": 0.1,
+        },
+    )
+
+    assert seen["last_arg"] == str(dst)  # exiftool operated on the destination
+    assert seen["dst_exists_when_called"] is True  # ...which already existed (moved first)
+    assert not src.exists()
 
 
 def test_apply_manifest_handles_every_kind(tmp_path: Path) -> None:

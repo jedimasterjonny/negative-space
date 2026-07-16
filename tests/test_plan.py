@@ -15,8 +15,7 @@ from negative_space.plan import (
     summarize,
 )
 
-_UTC = datetime.UTC
-_WHEN = datetime.datetime(2019, 9, 27, 11, 47, 23, tzinfo=_UTC)
+_WHEN = datetime.datetime(2019, 9, 27, 11, 47, 23)  # noqa: DTZ001 - naive UTC by design
 _SEPT = PurePosixPath("2019", "09 - September")
 
 
@@ -101,4 +100,4 @@ def test_scan_resolves_and_drops_motion(tmp_path: Path) -> None:
 
     resolved = next(keeper for keeper in keepers if keeper.source.name == "a.jpg")
     assert resolved.source_tag is MetadataSource.SIDECAR
-    assert resolved.metadata.taken_at == datetime.datetime(2014, 8, 17, 8, 0, 45, tzinfo=_UTC)
+    assert resolved.metadata.taken_at == datetime.datetime(2014, 8, 17, 8, 0, 45)  # noqa: DTZ001

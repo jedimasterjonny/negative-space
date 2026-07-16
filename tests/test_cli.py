@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import datetime
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
@@ -10,7 +11,9 @@ from negative_space import __main__
 from negative_space.archives import Archive
 from negative_space.cli import app
 from negative_space.extract import ExtractionSummary, ExtractOptions
-from negative_space.nas import NasError
+from negative_space.metadata import MetadataSource, PhotoMetadata
+from negative_space.nas import NasError, NfsMount
+from negative_space.plan import Drop, Keeper
 
 if TYPE_CHECKING:
     import pytest
@@ -52,36 +55,54 @@ def _summary(
 # --- organise --------------------------------------------------------------
 
 
-def test_organise_reports_singular_counts(tmp_path: Path) -> None:
-    (tmp_path / "Photos").mkdir()
-    (tmp_path / "index.html").touch()
+def test_organise_dry_run_reports_the_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mount = NfsMount(host="nas", export=PurePosixPath("/volume1/scriptorum"), mount_point=tmp_path)
+    when = datetime.datetime(2019, 9, 27, 11, 47, 23)  # noqa: DTZ001 - naive UTC
+    keepers = [
+        Keeper(
+            tmp_path / "a.jpg",
+            is_video=False,
+            metadata=PhotoMetadata(when),
+            source_tag=MetadataSource.SIDECAR,
+        ),
+    ]
+    drops = [Drop(tmp_path / "m.mp4", 2_000_000_000)]
+
+    def fake_scan(_target: Path, **_kwargs: object) -> tuple[list[Keeper], list[Drop]]:
+        return keepers, drops
+
+    monkeypatch.setattr("negative_space.cli.read_mounts", lambda: [mount])
+    monkeypatch.setattr("negative_space.cli.check_ssh", lambda _host: None)
+    monkeypatch.setattr(
+        "negative_space.cli.ensure_exiftool", lambda _host, _dir: "perl /x/exiftool"
+    )
+    monkeypatch.setattr("negative_space.cli.scan", fake_scan)
 
     result = runner.invoke(app, ["organise", str(tmp_path)])
 
     assert result.exit_code == 0
     output = _flatten(result.stdout)
-    assert "Found 1 top-level directory and 1 top-level file." in output
-    assert "Folder looks good." in output
-    assert "Reading top-level entries" not in output  # debug hidden without -v
+    assert "1 keepers" in output
+    assert "2.0 GB" in output  # motion videos reclaimed
+    assert "September" in output  # planned folder for the dated photo
+    assert "sidecar" in output  # metadata-source breakdown
+    assert "Dry run" in output
 
 
-def test_organise_reports_plural_counts(tmp_path: Path) -> None:
-    (tmp_path / "PhotosA").mkdir()
-    (tmp_path / "PhotosB").mkdir()
+def test_organise_reports_nas_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> list[NfsMount]:
+        message = "not on an NFS mount"
+        raise NasError(message)
+
+    monkeypatch.setattr("negative_space.cli.read_mounts", boom)
 
     result = runner.invoke(app, ["organise", str(tmp_path)])
 
-    assert result.exit_code == 0
-    assert "Found 2 top-level directories and 0 top-level files." in _flatten(result.stdout)
-
-
-def test_organise_verbose_flag_emits_debug_detail(tmp_path: Path) -> None:
-    (tmp_path / "Photos").mkdir()
-
-    result = runner.invoke(app, ["organise", "--verbose", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert "Reading top-level entries" in _flatten(result.stdout)
+    assert result.exit_code == 1
+    assert "not on an NFS mount" in _flatten(result.stdout)
 
 
 def test_organise_missing_target_is_rejected(tmp_path: Path) -> None:

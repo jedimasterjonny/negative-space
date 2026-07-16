@@ -18,7 +18,7 @@ from negative_space.metadata import (
 from negative_space.pairing import pair_directory
 
 _TS = "1408262445"  # 2014-08-17 08:00:45 UTC
-_WHEN = datetime.datetime(2014, 8, 17, 8, 0, 45, tzinfo=datetime.UTC)
+_WHEN = datetime.datetime(2014, 8, 17, 8, 0, 45)  # noqa: DTZ001 - naive UTC by design
 
 
 # --- pure parse helpers ----------------------------------------------------

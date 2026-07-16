@@ -68,7 +68,8 @@ def _timestamp(node: object) -> datetime.datetime | None:
     if not isinstance(raw, str | int):
         return None
     try:
-        return datetime.datetime.fromtimestamp(int(raw), tz=datetime.UTC)
+        # Naive UTC, to stay comparable with EXIF times (which have no zone).
+        return datetime.datetime.fromtimestamp(int(raw), tz=datetime.UTC).replace(tzinfo=None)
     except ValueError:
         return None
 

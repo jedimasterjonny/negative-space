@@ -40,6 +40,31 @@ negative-space organise --apply /nfs/…/takeout    # destructive; confirm promp
 | `_apply_executor.py` | **standalone, py3.8-compatible** executor, shipped to and run on the NAS |
 | `cli.py` | typer app (`extract`, `organise`) |
 
+## Matching algorithm — `pair_directory`, per folder
+
+Runs over one album/year folder's raw file list. Sidecar names are *generated forward from the
+media name*, never parsed back — the media name is the only part Takeout always preserves.
+
+1. **Classify** each file → image / video / other. By extension; a missing, unknown, or mangled
+   extension (anything but `.json`) falls back to a magic-byte content sniff.
+2. **Sidecar** — for each media file, generate candidates and take the first that exists in the
+   folder and isn't already claimed:
+   - `f"{name}.supplemental-metadata.json"`, then truncated to 51 chars by cutting from the right
+     (keep the trailing `.json`) — so `.supplemental-metadata`, and even the media extension, can
+     be partly or wholly lost, but the media name survives.
+   - numbered duplicate `photo(N).ext`: the base name's sidecar with `(N)` re-inserted *after*
+     truncation → `photo.ext.supplemental-metadata(N).json` (the `(N)` belongs to the `(N)` media).
+3. **Motion photo** — a video is the droppable half of a motion photo if its stem, or its whole
+   name, equals an image stem in the folder: `MVIMG_x.MP4`↔`MVIMG_x.jpg`, or the still-named-after-
+   the-video layout `PXL_x.MP`↔`PXL_x.MP.jpg`.
+4. **Edited copy** — a media file `…-edited.ext` (or a length-truncated `-edi`/`-ed`/`-e`, but only
+   where the full `-edited` would have overflowed 51 chars) with no sidecar of its own inherits the
+   metadata of its original `….ext`, if that original is present in the folder.
+
+Then resolve each keeper's date+GPS in order: its own sidecar `photoTakenTime` (UTC unix ts) →
+the inherited original's sidecar → embedded EXIF / mvhd → undated (`unsorted/`). This forward
+model took sidecar coverage from ~89% (reverse-regex) to 99.98%.
+
 ## Non-obvious decisions
 
 - **The executor is py3.8-safe and import-free.** The NAS runs Python 3.8; the executor is shipped

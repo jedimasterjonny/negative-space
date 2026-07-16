@@ -51,6 +51,14 @@ def test_build_manifest_lowers_every_op_kind() -> None:
     manifest = build_manifest(plan, output_root="/volume1/library", to_nas=_to_nas)
 
     assert manifest == [
+        # Drops first: the duplicate is verified against its keeper before any
+        # placement moves or rewrites that keeper's bytes.
+        {
+            "kind": "duplicate",
+            "src": "/volume1/export/Album/p.jpg",
+            "kept": "/volume1/export/p.jpg",
+        },
+        {"kind": "motion", "src": "/volume1/export/m.mp4"},
         {
             "kind": "photo",
             "src": "/volume1/export/p.jpg",
@@ -71,13 +79,24 @@ def test_build_manifest_lowers_every_op_kind() -> None:
             "src": "/volume1/export/x.png",
             "dst": "/volume1/library/unsorted/x.png",
         },
-        {"kind": "motion", "src": "/volume1/export/m.mp4"},
-        {
-            "kind": "duplicate",
-            "src": "/volume1/export/Album/p.jpg",
-            "kept": "/volume1/export/p.jpg",
-        },
     ]
+
+
+def test_build_manifest_verifies_duplicates_before_moving_their_keeper() -> None:
+    # A keeper that is also some duplicate's ``kept`` copy must be verified
+    # against before its own placement relocates (and rewrites) it.
+    kept = _placement("p.jpg", "2019/09 - September/x.jpg", video=False, meta=PhotoMetadata(_WHEN))
+    plan = LibraryPlan(
+        placements=(kept,),
+        motion_drops=(),
+        duplicate_drops=(
+            Duplicate(Path("/nfs/export/Album/p.jpg"), 20, Path("/nfs/export/p.jpg")),
+        ),
+    )
+
+    kinds = [op["kind"] for op in build_manifest(plan, output_root="/lib", to_nas=_to_nas)]
+
+    assert kinds.index("duplicate") < kinds.index("photo")
 
 
 def test_build_manifest_omits_gps_when_absent() -> None:

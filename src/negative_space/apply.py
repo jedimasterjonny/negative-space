@@ -32,15 +32,24 @@ def build_manifest(
     ``video`` (move + mtime) or ``undated`` (move as-is) op; each drop becomes a
     ``motion`` (delete) or ``duplicate`` (hash-verify then delete) op.
 
+    Drops are emitted *before* placements: a duplicate is hash-verified against
+    the copy being kept, and that copy is itself a placement whose move (and
+    rewrite) would relocate and alter its bytes. Verifying first, while both
+    originals are still in place, is what makes the check meaningful.
+
     Args:
         plan: The read-only library plan.
         output_root: The NAS path the organised library is written under.
         to_nas: Maps a source path on the NFS mount to its NAS-local path.
 
     Returns:
-        One operation dict per placement and per drop, in that order.
+        The operations: duplicate and motion drops first, then placements.
     """
-    ops: list[dict[str, object]] = []
+    ops: list[dict[str, object]] = [
+        {"kind": "duplicate", "src": to_nas(dup.source), "kept": to_nas(dup.kept)}
+        for dup in plan.duplicate_drops
+    ]
+    ops += [{"kind": "motion", "src": to_nas(drop.source)} for drop in plan.motion_drops]
     for placement in plan.placements:
         src = to_nas(placement.source)
         dst = output_root + "/" + placement.destination.as_posix()
@@ -62,9 +71,4 @@ def build_manifest(
                 op["lat"] = metadata.latitude
                 op["lng"] = metadata.longitude
             ops.append(op)
-    ops += [{"kind": "motion", "src": to_nas(drop.source)} for drop in plan.motion_drops]
-    ops += [
-        {"kind": "duplicate", "src": to_nas(dup.source), "kept": to_nas(dup.kept)}
-        for dup in plan.duplicate_drops
-    ]
     return ops
